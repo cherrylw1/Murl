@@ -54,6 +54,7 @@ export default function Settings(): JSX.Element {
   const [openRouterKey, setOpenRouterKey] = useState('');
   const [geminiKey, setGeminiKey] = useState('');
   const [ollamaBaseUrl, setOllamaBaseUrl] = useState('');
+  const [modelInput, setModelInput] = useState('');
 
   // Status and error states
   const [testStatuses, setTestStatuses] = useState<Record<ProviderId, 'idle' | 'testing' | 'success' | 'failed'>>({
@@ -73,6 +74,7 @@ export default function Settings(): JSX.Element {
       const settingsView = await window.murl.settings.get();
       setView(settingsView);
       setOllamaBaseUrl(settingsView.providers.ollama.baseUrl || '');
+      setModelInput(settingsView.activeModel || '');
     } catch (err) {
       console.error('Failed to load settings', err);
     } finally {
@@ -111,6 +113,13 @@ export default function Settings(): JSX.Element {
       }
     } catch (err) {
       console.error('Failed to change provider', err);
+    }
+  };
+
+  const handleInputChange = (val: string) => {
+    setModelInput(val);
+    if (view && PROVIDER_MODELS[view.activeProvider]?.includes(val)) {
+      handleModelChange(val);
     }
   };
 
@@ -247,17 +256,28 @@ export default function Settings(): JSX.Element {
             {/* Active Model Selector */}
             <div className="flex flex-col gap-2">
               <span className="text-xs font-sans text-aluminium uppercase tracking-label">Model</span>
-              <select
-                value={view?.activeModel || ''}
-                onChange={(e) => handleModelChange(e.target.value)}
-                className="w-full max-w-sm bg-carbon text-chalk border border-aluminium/20 rounded px-3 py-1.5 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-chalk/60 focus:border-chalk/60 cursor-pointer transition-all"
-              >
+              <input
+                type="text"
+                list="model-suggestions"
+                value={modelInput}
+                onChange={(e) => handleInputChange(e.target.value)}
+                onBlur={() => handleModelChange(modelInput)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleModelChange(modelInput);
+                  }
+                }}
+                className="w-full max-w-sm bg-carbon text-chalk border border-aluminium/20 rounded px-3 py-1.5 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-chalk/60 focus:border-chalk/60 transition-all"
+                placeholder="Select or type model ID"
+              />
+              <datalist id="model-suggestions">
                 {getModelsForProvider(view?.activeProvider || 'openrouter').map((model) => (
-                  <option key={model} value={model}>
-                    {model}
-                  </option>
+                  <option key={model} value={model} />
                 ))}
-              </select>
+              </datalist>
+              <span className="text-[10px] font-mono tracking-wider text-aluminium/70 mt-1">
+                type any model id — e.g. google/gemini-2.5-flash (OpenRouter), gemini-2.5-flash (Gemini), llama3.3 (Ollama)
+              </span>
             </div>
           </div>
         </div>
