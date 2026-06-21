@@ -22,6 +22,33 @@ type RunEvent =
   | { type: 'done';     runId: string; extracted: unknown }
   | { type: 'error';    runId: string; message: string };
 
+interface RunSummary {
+  id: string;
+  goal: string;
+  url: string;
+  status: string;
+  startedAt: number;
+  finishedAt?: number;
+}
+
+interface RunStep {
+  turn: number;
+  reasoning?: string;
+  action: any;
+  screenshot?: string;
+}
+
+interface RunDetail {
+  id: string;
+  goal: string;
+  url: string;
+  status: string;
+  startedAt: number;
+  finishedAt?: number;
+  steps: RunStep[];
+  extracted?: any;
+}
+
 interface Window {
   murl: {
     engineHealth(): Promise<string>;
@@ -32,6 +59,15 @@ interface Window {
       setActive(id: ProviderId, model: string): Promise<{ ok: boolean }>;
       setOllamaBaseUrl(url: string): Promise<{ ok: boolean }>;
       test(id: ProviderId): Promise<{ ok: boolean; error?: string }>;
+    };
+    runs: {
+      start(input: RunInput): Promise<{ runId: string }>;
+      cancel(runId: string): Promise<{ ok: boolean }>;
+      onEvent(cb: (e: RunEvent) => void): () => void;
+    };
+    history: {
+      list(): Promise<RunSummary[]>;
+      get(id: string): Promise<RunDetail | null>;
     };
   };
 }

@@ -56,6 +56,32 @@ const styles = `
 }
 `;
 
+function getHostname(urlStr: string): string {
+  try {
+    return new URL(urlStr).hostname;
+  } catch (err) {
+    return urlStr || 'unknown';
+  }
+}
+
+function formatRelativeTime(startedAt: number): string {
+  const diffMs = Date.now() - startedAt;
+  const diffSec = Math.floor(diffMs / 1000);
+  if (diffSec < 60) {
+    return 'just now';
+  }
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) {
+    return `${diffMin}m ago`;
+  }
+  const diffHrs = Math.floor(diffMin / 60);
+  if (diffHrs < 24) {
+    return `${diffHrs}h ago`;
+  }
+  const diffDays = Math.floor(diffHrs / 24);
+  return `${diffDays}d ago`;
+}
+
 export default function Runs({ onNavigateToSettings }: RunsProps): JSX.Element {
   // Input fields
   const [goal, setGoal] = useState('');
@@ -82,6 +108,22 @@ export default function Runs({ onNavigateToSettings }: RunsProps): JSX.Element {
   // IPC Subscription Ref
   const unsubscribeRef = useRef<(() => void) | null>(null);
 
+  // History states
+  const [historyList, setHistoryList] = useState<any[]>([]);
+  const [isReplay, setIsReplay] = useState(false);
+  const [replayLoading, setReplayLoading] = useState(false);
+  const [replayData, setReplayData] = useState<any | null>(null);
+  const [selectedStepTurn, setSelectedStepTurn] = useState<number | null>(null);
+
+  const fetchHistory = async () => {
+    try {
+      const list = await (window as any).murl.history.list();
+      setHistoryList(list || []);
+    } catch (err) {
+      console.error('Failed to fetch history list:', err);
+    }
+  };
+
   // Check if provider is configured
   const checkSettings = async () => {
     try {
@@ -107,6 +149,7 @@ export default function Runs({ onNavigateToSettings }: RunsProps): JSX.Element {
 
   useEffect(() => {
     checkSettings();
+    fetchHistory();
   }, []);
 
   // Auto scroll effect
@@ -209,8 +252,264 @@ export default function Runs({ onNavigateToSettings }: RunsProps): JSX.Element {
     setExtractedData(null);
     setErrorMessage(null);
     setIsCancelling(false);
+    setIsReplay(false);
+    setReplayData(null);
+    setSelectedStepTurn(null);
     checkSettings();
+    fetchHistory();
   };
+
+  const handleBackFromReplay = () => {
+    setIsReplay(false);
+    setReplayData(null);
+    setSelectedStepTurn(null);
+    fetchHistory();
+  };
+
+  const handleRowClick = async (runIdStr: string) => {
+    setIsReplay(true);
+    setReplayLoading(true);
+    setReplayData(null);
+    setSelectedStepTurn(null);
+    try {
+      const data = await (window as any).murl.history.get(runIdStr);
+      setReplayData(data);
+    } catch (err) {
+      console.error('Failed to get run details:', err);
+    } finally {
+      setReplayLoading(false);
+    }
+  };
+
+  // Render States
+  if (isReplay) {
+    if (replayLoading) {
+      return (
+        <div className="flex-1 panel p-8 flex flex-col items-center justify-center bg-dotgrid bg-repeat min-h-0">
+          <div className="flex flex-col items-center gap-3 text-center">
+            <span className="font-dot text-xl text-aluminium tracking-widest animate-pulse">LOADING</span>
+            <span className="text-[10px] font-sans text-aluminium/60 uppercase tracking-label">Retrieving run details...</span>
+          </div>
+        </div>
+      );
+    }
+
+    if (!replayData || !replayData.run) {
+      return (
+        <div className="flex-1 panel p-8 flex flex-col items-center justify-center bg-dotgrid bg-repeat min-h-0">
+          <div className="max-w-md w-full panel p-8 flex flex-col gap-6 text-left relative bg-carbon border-signal/30">
+            <div className="flex items-center gap-3">
+              <span className="w-2.5 h-2.5 rounded-full bg-signal shadow-signal"></span>
+              <span className="font-dot text-lg tracking-widest text-signal uppercase mt-0.5">Run Not Found</span>
+            </div>
+            <p className="text-xs font-sans text-aluminium leading-relaxed uppercase">
+              The requested run details could not be found or failed to load.
+            </p>
+            <div className="flex justify-end mt-2">
+              <button
+                onClick={handleBackFromReplay}
+                className="px-5 py-2.5 text-xs font-sans uppercase tracking-label bg-carbon text-chalk border border-aluminium/40 hover:border-chalk hover:shadow-active rounded transition-all duration-150 cursor-pointer"
+              >
+                Back to History
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    const { run, steps } = replayData;
+
+    // Get the screenshot of the active/selected step
+    let activeScreenshot: string | null = null;
+    if (selectedStepTurn !== null) {
+      const activeStep = steps.find((s: any) => s.turn === selectedStepTurn);
+      activeScreenshot = activeStep?.screenshot || null;
+    } else {
+      // Find the last step with a screenshot
+      const stepsWithScreenshots = steps.filter((s: any) => s.screenshot);
+      if (stepsWithScreenshots.length > 0) {
+        activeScreenshot = stepsWithScreenshots[stepsWithScreenshots.length - 1].screenshot;
+      }
+    }
+
+    // Determine the status class/styling for the header status dot
+    let headerDotClass = 'bg-aluminium';
+    let headerDotStyle = {};
+    if (run.status === 'done' || run.status === 'complete') {
+      headerDotClass = 'bg-chalk';
+      headerDotStyle = { boxShadow: '0 0 8px #FAFAFA' };
+    } else if (run.status === 'error') {
+      headerDotClass = 'bg-signal';
+      headerDotStyle = { boxShadow: '0 0 8px #D71921' };
+    }
+
+    return (
+      <div className="flex-1 panel p-8 flex flex-col overflow-y-auto select-text bg-dotgrid bg-repeat gap-6 min-h-0">
+        <style>{styles}</style>
+
+        {/* Header bar */}
+        <div className="flex items-center justify-between pb-4 border-b border-aluminium/20">
+          <div className="flex items-center gap-3">
+            <span
+              className={`w-2.5 h-2.5 rounded-full ${headerDotClass}`}
+              style={headerDotStyle}
+            ></span>
+            <span className="font-dot text-lg tracking-widest text-chalk uppercase mt-0.5">
+              REPLAY: {getHostname(run.start_url || run.url)}
+            </span>
+          </div>
+          <button
+            onClick={handleBackFromReplay}
+            className="px-3 py-1.5 text-xs font-sans text-chalk bg-transparent border border-aluminium/40 hover:border-chalk hover:shadow-active rounded transition-all duration-150 cursor-pointer uppercase tracking-label"
+          >
+            Back
+          </button>
+        </div>
+
+        {/* Run Metadata display */}
+        <div className="p-4 bg-carbon border border-aluminium/20 rounded flex flex-col gap-2">
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] uppercase tracking-label font-sans text-aluminium">Research Goal</span>
+            <span className="text-xs font-sans text-chalk">{run.goal}</span>
+          </div>
+          <div className="flex items-center gap-6 mt-1 text-[10px] font-mono text-aluminium uppercase tracking-wider">
+            <div>
+              <span className="text-aluminium/60 mr-1.5">PROVIDER:</span>
+              <span className="text-chalk font-semibold uppercase">{run.provider_id}</span>
+            </div>
+            <div>
+              <span className="text-aluminium/60 mr-1.5">MODEL:</span>
+              <span className="text-chalk">{run.model}</span>
+            </div>
+            <div>
+              <span className="text-aluminium/60 mr-1.5">STARTED:</span>
+              <span className="text-chalk">{new Date(run.created_at).toLocaleString()}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Workspace grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 min-h-0 flex-1">
+          {/* Screenshot Column */}
+          <div className="flex flex-col gap-2 min-h-0">
+            <div className="flex items-center justify-between">
+              <span className="text-xs uppercase tracking-label font-sans text-aluminium">
+                {selectedStepTurn !== null ? `Step ${selectedStepTurn} Screenshot` : 'Final Screenshot'}
+              </span>
+              {selectedStepTurn !== null && (
+                <button
+                  onClick={() => setSelectedStepTurn(null)}
+                  className="text-[10px] uppercase tracking-label font-sans text-aluminium hover:text-chalk transition-colors bg-transparent border-0 cursor-pointer"
+                >
+                  Show Final
+                </button>
+              )}
+            </div>
+            <div className="flex-1 bg-well border border-aluminium/20 rounded overflow-hidden relative flex items-center justify-center p-2 min-h-[300px]">
+              {activeScreenshot ? (
+                <img
+                  src={activeScreenshot}
+                  alt="Browser Frame"
+                  className="max-w-full max-h-full object-contain rounded"
+                />
+              ) : (
+                <div className="flex flex-col items-center gap-2 text-center">
+                  <span className="font-dot text-xl text-aluminium/40 tracking-widest animate-pulse">...</span>
+                  <span className="text-xs font-sans text-aluminium/60 uppercase tracking-label">No screenshot recorded for this step</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Action Log / Results Column */}
+          <div className="flex flex-col gap-6 min-h-0">
+            {/* Action Log */}
+            <div className="flex flex-col gap-2 min-h-0 flex-1">
+              <span className="text-xs uppercase tracking-label font-sans text-aluminium">Action Stream (Click step to view screenshot)</span>
+              <div
+                className="flex-1 bg-well/50 backdrop-blur-sm border border-aluminium/20 rounded p-4 font-mono text-xs overflow-y-auto flex flex-col gap-3 min-h-[250px]"
+              >
+                {steps.length === 0 ? (
+                  <div className="text-aluminium/40 italic font-mono text-xs uppercase tracking-wider p-2">
+                    No actions recorded for this run.
+                  </div>
+                ) : (
+                  steps.map((step: any) => {
+                    const turnStr = String(step.turn).padStart(2, '0');
+                    const actionType = step.action?.action || 'unknown';
+                    const actionDetails = Object.entries(step.action || {})
+                      .filter(([k]) => k !== 'action' && k !== 'thought')
+                      .map(([k, v]) => `${k}:${JSON.stringify(v)}`)
+                      .join(' ');
+                    
+                    const isSelected = selectedStepTurn === step.turn;
+
+                    return (
+                      <div
+                        key={step.turn}
+                        onClick={() => setSelectedStepTurn(step.turn)}
+                        className={`flex flex-col gap-1.5 border-b border-aluminium/5 pb-2.5 last:border-0 last:pb-0 cursor-pointer p-1.5 rounded transition-all duration-150 ${
+                          isSelected
+                            ? 'bg-carbon border-aluminium/20 shadow-active'
+                            : 'hover:bg-carbon/40'
+                        }`}
+                      >
+                        {/* Thought line */}
+                        <div className="text-aluminium font-sans text-xs flex justify-between">
+                          <div>
+                            <span className="font-mono text-xs text-aluminium/60 bg-carbon px-1.5 py-0.5 rounded mr-2">
+                              T{turnStr}
+                            </span>
+                            {step.thought || step.reasoning || '(no thought)'}
+                          </div>
+                          {step.screenshot && (
+                            <span className="text-[9px] text-aluminium/50 uppercase tracking-wider self-center">
+                              📸
+                            </span>
+                          )}
+                        </div>
+                        {/* Action line */}
+                        <div className="flex items-baseline gap-2 pl-8">
+                          <span className="font-dot text-chalk text-xs uppercase tracking-wider">
+                            ▸ {actionType}
+                          </span>
+                          <span className="text-chalk/80 text-xs font-mono truncate">
+                            {actionDetails}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+
+            {/* Extracted Data / Error Message Section */}
+            {(run.status === 'done' || run.status === 'complete' || run.result_json || run.error) && (
+              <div className="flex flex-col gap-2 flex-shrink-0">
+                {run.status === 'error' || run.error ? (
+                  <div className="flex flex-col gap-2">
+                    <span className="text-xs uppercase tracking-label font-sans text-aluminium">Error Message</span>
+                    <div className="text-xs font-mono text-signal bg-signal/5 border border-signal/20 p-4 rounded overflow-auto max-h-[150px] whitespace-pre-wrap">
+                      {run.error || 'An unknown error occurred during execution.'}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    <span className="text-xs uppercase tracking-label font-sans text-aluminium">Extracted Data</span>
+                    <pre className="text-xs font-mono text-chalk bg-well/80 p-4 border border-aluminium/20 rounded overflow-auto max-h-[180px] whitespace-pre-wrap break-all">
+                      {JSON.stringify(run.result || (run.result_json ? JSON.parse(run.result_json) : null), null, 2)}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Render States
   if (status === 'idle') {
@@ -297,6 +596,68 @@ export default function Runs({ onNavigateToSettings }: RunsProps): JSX.Element {
             )}
           </div>
         </form>
+
+        {/* Recent Runs List */}
+        <div className="mt-12 mb-6 border-t border-aluminium/10 pt-8 max-w-4xl">
+          <h3 className="font-dot text-lg tracking-widest text-chalk uppercase mb-1">Recent Runs</h3>
+          <span className="text-xs uppercase tracking-label font-sans text-aluminium">History of research agent executions</span>
+        </div>
+
+        <div className="max-w-4xl">
+          {historyList.length === 0 ? (
+            <div className="p-6 bg-carbon/50 border border-aluminium/15 rounded text-center text-xs font-sans text-aluminium uppercase tracking-wider">
+              No past runs recorded.
+            </div>
+          ) : (
+            <div className="flex flex-col border border-aluminium/15 rounded overflow-hidden divide-y divide-aluminium/10 bg-carbon/20">
+              {historyList.map((runItem) => {
+                const hostname = getHostname(runItem.url);
+                const relativeTime = formatRelativeTime(runItem.startedAt);
+                
+                let dotClass = 'bg-aluminium';
+                let dotStyle = {};
+                if (runItem.status === 'done' || runItem.status === 'complete') {
+                  dotClass = 'bg-chalk';
+                  dotStyle = { boxShadow: '0 0 8px #FAFAFA' };
+                } else if (runItem.status === 'error') {
+                  dotClass = 'bg-signal';
+                  dotStyle = { boxShadow: '0 0 8px #D71921' };
+                }
+
+                return (
+                  <div
+                    key={runItem.id}
+                    onClick={() => handleRowClick(runItem.id)}
+                    className="flex items-center justify-between p-4 hover:bg-carbon/50 transition-colors cursor-pointer group"
+                  >
+                    <div className="flex items-center gap-4 min-w-0 flex-1 mr-4">
+                      <span
+                        className={`w-2 h-2 rounded-full flex-shrink-0 ${dotClass}`}
+                        style={dotStyle}
+                      ></span>
+                      <div className="flex flex-col min-w-0 gap-1">
+                        <span className="text-xs font-sans text-chalk font-medium truncate max-w-2xl group-hover:text-chalk transition-colors">
+                          {runItem.goal}
+                        </span>
+                        <span className="text-[10px] font-mono text-aluminium uppercase tracking-wider">
+                          {hostname}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-4 flex-shrink-0">
+                      <span className="text-[10px] font-mono text-aluminium uppercase tracking-wider">
+                        {relativeTime}
+                      </span>
+                      <span className="text-aluminium group-hover:text-chalk transition-colors font-mono text-xs select-none">
+                        &rarr;
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
     );
   }

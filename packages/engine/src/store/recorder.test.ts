@@ -225,4 +225,51 @@ describe('Recorder', () => {
       fs.rmSync(tempDir, { recursive: true, force: true });
     } catch {}
   });
+
+  it('correctly lists runs newest first', () => {
+    const dbName = `murl-list-test-${crypto.randomUUID()}.db`;
+    const tempDir = path.join(
+      os.tmpdir(),
+      `murl-screenshots-${crypto.randomUUID()}`,
+    );
+    const dbPath = path.join(os.tmpdir(), dbName);
+
+    const recorder = new Recorder({ dbPath, screenshotDir: tempDir });
+
+    const runId1 = recorder.startRun({
+      goal: 'First run',
+      startUrl: 'https://example.com/1',
+      providerId: 'ollama',
+      model: 'llama3',
+    });
+    recorder.finishRun(runId1, { status: 'complete' });
+
+    // Wait a tiny bit to guarantee different timestamps
+    const start = Date.now();
+    while (Date.now() - start < 5) {}
+
+    const runId2 = recorder.startRun({
+      goal: 'Second run',
+      startUrl: 'https://example.com/2',
+      providerId: 'ollama',
+      model: 'llama3',
+    });
+    recorder.finishRun(runId2, { status: 'error', error: 'some error' });
+
+    const summaries = recorder.listRuns();
+    expect(summaries).toHaveLength(2);
+    expect(summaries[0].id).toBe(runId2);
+    expect(summaries[0].goal).toBe('Second run');
+    expect(summaries[0].status).toBe('error');
+    expect(summaries[1].id).toBe(runId1);
+    expect(summaries[1].goal).toBe('First run');
+    expect(summaries[1].status).toBe('complete');
+
+    recorder.close();
+
+    try {
+      fs.unlinkSync(dbPath);
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch {}
+  });
 });

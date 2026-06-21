@@ -36,6 +36,15 @@ export interface FinishOptions {
   error?: string;
 }
 
+export interface RunSummary {
+  id: string;
+  goal: string;
+  url: string;
+  status: string;
+  startedAt: number;
+  finishedAt?: number;
+}
+
 export class Recorder {
   readonly db: DatabaseSync;
   private readonly screenshotDir: string;
@@ -158,6 +167,26 @@ export class Recorder {
     }));
 
     return { run, steps };
+  }
+
+  listRuns(): RunSummary[] {
+    const stmt = this.db.prepare('SELECT id, goal, start_url as url, status, created_at as startedAt, finished_at as finishedAt FROM runs ORDER BY created_at DESC');
+    const rows = stmt.all() as {
+      id: string;
+      goal: string;
+      url: string;
+      status: string;
+      startedAt: number;
+      finishedAt: number | null;
+    }[];
+    return rows.map((r) => ({
+      id: r.id,
+      goal: r.goal,
+      url: r.url,
+      status: r.status,
+      startedAt: r.startedAt,
+      finishedAt: r.finishedAt ?? undefined,
+    }));
   }
 
   close(): void {

@@ -22,5 +22,8 @@ contextBridge.exposeInMainWorld('murl', {
       };
     },
   },
+  history: {
+    list: () => ipcRenderer.invoke('history:list'),
+    get: (runId: string) => ipcRenderer.invoke('history:get', runId),
+  },
 });
-

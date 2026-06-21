@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, Menu, Tray } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { fileURLToPath } from 'url';
-import { health, createProvider, ProviderId, BrowserSession, runAgent } from '@murl/engine';
+import { health, createProvider, ProviderId, BrowserSession, runAgent, Recorder } from '@murl/engine';
 import { SettingsStore } from './settingsStore.js';
 import crypto from 'crypto';
 
@@ -63,10 +63,69 @@ app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
 
   const store = new SettingsStore();
+  const recorder = new Recorder({
+    dbPath: path.join(app.getPath('userData'), 'murl.db'),
+    screenshotDir: path.join(app.getPath('userData'), 'screenshots'),
+  });
 
   // Set up IPC handle calling the headless engine health()
   ipcMain.handle('engine:health', () => {
     return health();
+  });
+
+  // History IPC Handlers
+  ipcMain.handle('history:list', () => {
+    try {
+      return recorder.listRuns();
+    } catch (err) {
+      console.error('Failed to list runs:', err);
+      return [];
+    }
+  });
+
+  ipcMain.handle('history:get', async (_event, id: string) => {
+    try {
+      const result = recorder.getRun(id);
+      if (!result) {
+        return null;
+      }
+
+      const { run, steps } = result;
+
+      const mappedSteps = steps.map((step) => {
+        let screenshot: string | undefined = undefined;
+        const screenshotPath = step.screenshot_path as string | null;
+        if (screenshotPath && fs.existsSync(screenshotPath)) {
+          try {
+            const buffer = fs.readFileSync(screenshotPath);
+            screenshot = `data:image/png;base64,${buffer.toString('base64')}`;
+          } catch (e) {
+            console.error(`Failed to read screenshot at ${screenshotPath}:`, e);
+          }
+        }
+
+        return {
+          turn: step.turn as number,
+          reasoning: (step.thought as string | null) ?? undefined,
+          action: step.action,
+          screenshot,
+        };
+      });
+
+      return {
+        id: run.id as string,
+        goal: run.goal as string,
+        url: run.start_url as string,
+        status: run.status as string,
+        startedAt: run.created_at as number,
+        finishedAt: (run.finished_at as number | null) ?? undefined,
+        steps: mappedSteps,
+        extracted: run.result,
+      };
+    } catch (err) {
+      console.error('Failed to get run:', err);
+      return null;
+    }
   });
 
   // Settings IPC Handlers
@@ -150,6 +209,18 @@ app.whenReady().then(() => {
       return { runId };
     }
 
+    try {
+      recorder.startRun({
+        id: runId,
+        goal: input.goal,
+        startUrl: input.url,
+        providerId,
+        model,
+      });
+    } catch (err) {
+      console.error('Failed to start run in database recorder:', err);
+    }
+
     // Run the agent run asynchronously in the background
     (async () => {
       // Give the renderer a tiny bit of time to subscribe to events
@@ -170,6 +241,25 @@ app.whenReady().then(() => {
 
         await session.goto(input.url);
 
+        const initialShot = await session.screenshot().catch(() => undefined);
+        let initialDataUrl: string | undefined = undefined;
+        if (initialShot) {
+          initialDataUrl = `data:image/png;base64,${initialShot.toString('base64')}`;
+        }
+        event.sender.send('run:event', {
+          type: 'step',
+          runId,
+          turn: 0,
+          action: { action: 'navigate', url: input.url },
+          screenshot: initialDataUrl,
+        });
+        recorder.recordStep({
+          runId,
+          turn: 0,
+          action: { action: 'navigate', url: input.url },
+          screenshot: initialShot,
+        });
+
         const runResult = await runAgent({
           goal: input.goal,
           url: input.url,
@@ -189,24 +279,35 @@ app.whenReady().then(() => {
               action,
               screenshot: dataUrl,
             });
+            recorder.recordStep({
+              runId,
+              turn,
+              thought: reasoning,
+              action,
+              screenshot,
+            });
           },
         });
 
         if (runResult.status === 'complete') {
           event.sender.send('run:event', { type: 'done', runId, extracted: runResult.extracted });
           event.sender.send('run:event', { type: 'status', runId, status: 'done' });
+          recorder.finishRun(runId, { status: 'complete', result: runResult.extracted });
         } else if (runResult.status === 'error') {
           event.sender.send('run:event', { type: 'error', runId, message: runResult.error || 'Unknown error occurred' });
           event.sender.send('run:event', { type: 'status', runId, status: 'error' });
+          recorder.finishRun(runId, { status: 'error', error: runResult.error || 'Unknown error occurred' });
         } else {
           event.sender.send('run:event', { type: 'status', runId, status: 'done' });
           event.sender.send('run:event', { type: 'done', runId, extracted: runResult.extracted });
+          recorder.finishRun(runId, { status: runResult.status, result: runResult.extracted });
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`Exception occurred during run:`, message);
         event.sender.send('run:event', { type: 'error', runId, message });
         event.sender.send('run:event', { type: 'status', runId, status: 'error' });
+        recorder.finishRun(runId, { status: 'error', error: message });
       } finally {
         if (session) {
           await session.close().catch(() => {});
