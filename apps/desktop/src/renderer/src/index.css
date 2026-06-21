@@ -1,6 +1,14 @@
 @import "tailwindcss";
 @config "../../../tailwind.config.js";
 
+@font-face {
+  font-family: 'DotMatrix';
+  src: url('./assets/fonts/DotMatrix-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 @layer base {
   body {
     @apply bg-ink text-chalk font-sans select-none antialiased;

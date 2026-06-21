@@ -15,7 +15,7 @@ export default {
         signal: '#D71921',
       },
       fontFamily: {
-        dot: ['DotGothic16', 'monospace'],
+        dot: ['DotMatrix', 'monospace'],
         sans: ['"Inter Variable"', 'Inter', 'system-ui', 'sans-serif'],
         mono: ['"JetBrains Mono"', 'monospace'],
       },
