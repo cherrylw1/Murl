@@ -15,7 +15,7 @@ function App(): JSX.Element {
   const isEngineOk = health === 'murl-engine-ok';
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden bg-ink select-none font-sans text-chalk bg-dotgrid p-6 gap-6">
+    <div className="flex flex-col h-screen overflow-hidden select-none font-sans text-chalk p-6 gap-6">
       {/* Top Strip */}
       <div className="flex items-center justify-between h-8 border-b border-aluminium/20 pb-3">
         <div className="flex items-baseline gap-3">

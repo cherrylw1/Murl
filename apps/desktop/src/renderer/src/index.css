@@ -4,14 +4,15 @@
 @layer base {
   body {
     @apply bg-ink text-chalk font-sans select-none antialiased;
-    background-image: radial-gradient(rgba(138, 138, 138, 0.06) 1px, transparent 1px);
-    background-size: 8px 8px;
+    background-color: #0A0A0A;
+    background-image: radial-gradient(rgba(255, 255, 255, 0.05) 1.5px, transparent 1.5px);
+    background-size: 22px 22px;
   }
 }
 
 .panel {
-  background: rgba(22, 22, 22, 0.90); /* carbon @ 90% */
-  backdrop-filter: blur(8px);
-  border: 1px solid rgba(138, 138, 138, 0.18); /* hairline */
+  background: rgba(22, 22, 22, 0.55);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(138, 138, 138, 0.18);
   border-radius: 6px;
 }
