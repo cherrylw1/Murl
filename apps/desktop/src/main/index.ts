@@ -26,6 +26,7 @@ function createWindow(): void {
       preload: preloadPath,
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: false, // ESM (.mjs) preloads don't run in a sandboxed renderer
     },
   });
 
