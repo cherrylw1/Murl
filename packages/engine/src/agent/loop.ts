@@ -1,5 +1,6 @@
 import { BrowserSession } from '../browser/session.js';
 import { LLMProvider } from '../providers/types.js';
+import { Recorder } from '../store/recorder.js';
 import { Action, parseAction } from './actions.js';
 import { buildMessages } from './prompt.js';
 
@@ -26,6 +27,7 @@ export interface RunOptions {
   model: string;
   maxTurns?: number; // default 5
   session?: BrowserSession;
+  recorder?: Recorder;
 }
 
 function cleanJsonText(text: string): string {
@@ -108,6 +110,16 @@ export async function runAgent(opts: RunOptions): Promise<RunResult> {
     ownSession = true;
   }
 
+  let runId: string | undefined = undefined;
+  if (opts.recorder) {
+    runId = opts.recorder.startRun({
+      goal: opts.goal,
+      startUrl: opts.url,
+      providerId: opts.provider.id,
+      model: opts.model,
+    });
+  }
+
   try {
     await session.goto(opts.url);
 
@@ -116,6 +128,9 @@ export async function runAgent(opts: RunOptions): Promise<RunResult> {
       const messages = buildMessages(opts.goal, page);
 
       let resText = '';
+      let usage:
+        | { promptTokens?: number; completionTokens?: number }
+        | undefined = undefined;
       try {
         const res = await opts.provider.complete({
           model: opts.model,
@@ -123,15 +138,36 @@ export async function runAgent(opts: RunOptions): Promise<RunResult> {
           responseFormat: 'json',
         });
         resText = res.text;
+        usage = res.usage;
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
+        const dummyAction: Action = {
+          action: 'complete',
+          result: null,
+          thought: 'API failure',
+        };
         steps.push({
           turn,
           thought: 'LLM completion failed',
-          action: { action: 'complete', result: null, thought: 'API failure' },
+          action: dummyAction,
           pageUrl: page.url,
           note: errorMsg,
         });
+
+        if (opts.recorder && runId) {
+          const shot = await session.screenshot().catch(() => undefined);
+          opts.recorder.recordStep({
+            runId,
+            turn,
+            thought: 'LLM completion failed',
+            action: dummyAction,
+            pageState: page,
+            note: errorMsg,
+            screenshot: shot,
+          });
+          opts.recorder.finishRun(runId, { status: 'error', error: errorMsg });
+        }
+
         return { status: 'error', steps, extracted, error: errorMsg };
       }
 
@@ -148,17 +184,34 @@ export async function runAgent(opts: RunOptions): Promise<RunResult> {
         thought = action.thought;
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
+        const dummyAction: Action = {
+          action: 'complete',
+          result: null,
+          thought: 'JSON parse error',
+        };
         steps.push({
           turn,
           thought: 'Failed to parse action JSON',
-          action: {
-            action: 'complete',
-            result: null,
-            thought: 'JSON parse error',
-          },
+          action: dummyAction,
           pageUrl: page.url,
           note: errorMsg,
         });
+
+        if (opts.recorder && runId) {
+          const shot = await session.screenshot().catch(() => undefined);
+          opts.recorder.recordStep({
+            runId,
+            turn,
+            thought: 'Failed to parse action JSON',
+            action: dummyAction,
+            pageState: page,
+            note: errorMsg,
+            screenshot: shot,
+            usage,
+          });
+          opts.recorder.finishRun(runId, { status: 'error', error: errorMsg });
+        }
+
         return { status: 'error', steps, extracted, error: errorMsg };
       }
 
@@ -172,12 +225,32 @@ export async function runAgent(opts: RunOptions): Promise<RunResult> {
         note: applyRes.note,
       });
 
+      if (opts.recorder && runId) {
+        const shot = await session.screenshot().catch(() => undefined);
+        opts.recorder.recordStep({
+          runId,
+          turn,
+          thought,
+          action,
+          pageState: page,
+          note: applyRes.note,
+          screenshot: shot,
+          usage,
+        });
+      }
+
       if (applyRes.done) {
         result = applyRes.result;
+        if (opts.recorder && runId) {
+          opts.recorder.finishRun(runId, { status: 'complete', result });
+        }
         return { status: 'complete', steps, extracted, result };
       }
     }
 
+    if (opts.recorder && runId) {
+      opts.recorder.finishRun(runId, { status: 'max_turns' });
+    }
     return { status: 'max_turns', steps, extracted };
   } finally {
     if (ownSession) {
