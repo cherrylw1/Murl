@@ -2,7 +2,8 @@ import { app, BrowserWindow, ipcMain, Menu, Tray } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { fileURLToPath } from 'url';
-import { health } from '@murl/engine';
+import { health, createProvider, ProviderId } from '@murl/engine';
+import { SettingsStore } from './settingsStore.js';
 
 // Helper to resolve __dirname in ES Modules (electron-vite compiles main to ESM)
 const __filename = fileURLToPath(import.meta.url);
@@ -59,9 +60,68 @@ app.whenReady().then(() => {
   // Remove default File/Edit/View menu bar
   Menu.setApplicationMenu(null);
 
+  const store = new SettingsStore();
+
   // Set up IPC handle calling the headless engine health()
   ipcMain.handle('engine:health', () => {
     return health();
+  });
+
+  // Settings IPC Handlers
+  ipcMain.handle('settings:get', () => {
+    return store.getSettingsView();
+  });
+
+  ipcMain.handle('settings:setKey', (_event, id: ProviderId, key: string) => {
+    return store.setKey(id, key);
+  });
+
+  ipcMain.handle('settings:clearKey', (_event, id: ProviderId) => {
+    return store.clearKey(id);
+  });
+
+  ipcMain.handle('settings:setActive', (_event, id: ProviderId, model: string) => {
+    return store.setActive(id, model);
+  });
+
+  ipcMain.handle('settings:setOllamaBaseUrl', (_event, url: string) => {
+    return store.setOllamaBaseUrl(url);
+  });
+
+  ipcMain.handle('settings:test', async (_event, id: ProviderId) => {
+    try {
+      if (id === 'openrouter' || id === 'gemini') {
+        const apiKey = store.getDecryptedKey(id);
+        if (!apiKey) {
+          return { ok: false, error: 'API key is not configured.' };
+        }
+        const activeModel = store.getActiveModel(id);
+        const defaultModel = id === 'openrouter' ? 'google/gemini-2.5-flash' : 'gemini-1.5-flash';
+        const model = activeModel || defaultModel;
+
+        const provider = createProvider(id, { apiKey });
+        await provider.complete({
+          model,
+          messages: [{ role: 'user', content: 'say ok' }],
+          maxTokens: 1,
+        });
+        return { ok: true };
+      } else if (id === 'ollama') {
+        const ollamaBaseUrl = store.getOllamaBaseUrl();
+        const cleanUrl = ollamaBaseUrl.trim().replace(/\/+$/, '');
+        const testUrl = cleanUrl.endsWith('/v1') ? `${cleanUrl}/models` : `${cleanUrl}/v1/models`;
+        const res = await fetch(testUrl);
+        if (!res.ok) {
+          return { ok: false, error: `Ollama returned HTTP error status ${res.status}` };
+        }
+        return { ok: true };
+      } else {
+        return { ok: false, error: `Unknown provider ID: ${id}` };
+      }
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: errorMessage };
+    }
   });
 
   createWindow();

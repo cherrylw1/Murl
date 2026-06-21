@@ -1,9 +1,11 @@
 // eslint-disable-next-line @typescript-eslint/triple-slash-reference
 /// <reference path="../../preload/index.d.ts" />
 import React, { useEffect, useState } from 'react';
+import Settings from './components/Settings';
 
 function App(): JSX.Element {
   const [health, setHealth] = useState<string>('loading...');
+  const [activeTab, setActiveTab] = useState<'runs' | 'recipes' | 'schedule' | 'library' | 'settings'>('runs');
 
   useEffect(() => {
     window.murl
@@ -32,24 +34,93 @@ function App(): JSX.Element {
         {/* Left Sidebar */}
         <div className="w-[180px] flex flex-col justify-between py-2 shrink-0">
           <nav className="flex flex-col gap-5 text-sm font-sans tracking-[0.02em]">
-            <a href="#runs" className="text-chalk font-semibold transition-colors duration-150 flex items-center gap-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-chalk shadow-active"></span>
+            <a
+              href="#runs"
+              onClick={(e) => {
+                e.preventDefault();
+                setActiveTab('runs');
+              }}
+              className={`transition-colors duration-150 flex items-center gap-2 ${
+                activeTab === 'runs'
+                  ? 'text-chalk font-semibold'
+                  : 'text-aluminium hover:text-chalk pl-3.5'
+              }`}
+            >
+              {activeTab === 'runs' && (
+                <span className="w-1.5 h-1.5 rounded-full bg-chalk shadow-active"></span>
+              )}
               Runs
             </a>
-            <a href="#recipes" className="text-aluminium hover:text-chalk transition-colors duration-150 pl-3.5">
+            <a
+              href="#recipes"
+              onClick={(e) => {
+                e.preventDefault();
+                setActiveTab('recipes');
+              }}
+              className={`transition-colors duration-150 flex items-center gap-2 ${
+                activeTab === 'recipes'
+                  ? 'text-chalk font-semibold'
+                  : 'text-aluminium hover:text-chalk pl-3.5'
+              }`}
+            >
+              {activeTab === 'recipes' && (
+                <span className="w-1.5 h-1.5 rounded-full bg-chalk shadow-active"></span>
+              )}
               Recipes
             </a>
-            <a href="#schedule" className="text-aluminium hover:text-chalk transition-colors duration-150 pl-3.5">
+            <a
+              href="#schedule"
+              onClick={(e) => {
+                e.preventDefault();
+                setActiveTab('schedule');
+              }}
+              className={`transition-colors duration-150 flex items-center gap-2 ${
+                activeTab === 'schedule'
+                  ? 'text-chalk font-semibold'
+                  : 'text-aluminium hover:text-chalk pl-3.5'
+              }`}
+            >
+              {activeTab === 'schedule' && (
+                <span className="w-1.5 h-1.5 rounded-full bg-chalk shadow-active"></span>
+              )}
               Schedule
             </a>
-            <a href="#library" className="text-aluminium hover:text-chalk transition-colors duration-150 pl-3.5">
+            <a
+              href="#library"
+              onClick={(e) => {
+                e.preventDefault();
+                setActiveTab('library');
+              }}
+              className={`transition-colors duration-150 flex items-center gap-2 ${
+                activeTab === 'library'
+                  ? 'text-chalk font-semibold'
+                  : 'text-aluminium hover:text-chalk pl-3.5'
+              }`}
+            >
+              {activeTab === 'library' && (
+                <span className="w-1.5 h-1.5 rounded-full bg-chalk shadow-active"></span>
+              )}
               Library
             </a>
           </nav>
 
           <div className="flex flex-col gap-4">
             <div className="border-t border-aluminium/20 my-2"></div>
-            <a href="#settings" className="text-sm text-aluminium hover:text-chalk transition-colors duration-150 pl-3.5 font-sans">
+            <a
+              href="#settings"
+              onClick={(e) => {
+                e.preventDefault();
+                setActiveTab('settings');
+              }}
+              className={`text-sm transition-colors duration-150 flex items-center gap-2 ${
+                activeTab === 'settings'
+                  ? 'text-chalk font-semibold'
+                  : 'text-aluminium hover:text-chalk pl-3.5 font-sans'
+              }`}
+            >
+              {activeTab === 'settings' && (
+                <span className="w-1.5 h-1.5 rounded-full bg-chalk shadow-active"></span>
+              )}
               Settings
             </a>
           </div>
@@ -78,14 +149,18 @@ function App(): JSX.Element {
           </div>
 
           {/* Large frosted main panel */}
-          <div className="flex-1 panel p-8 flex flex-col items-center justify-center text-center relative overflow-hidden">
-            <div className="max-w-md flex flex-col items-center gap-3 z-10">
-              <span className="font-dot text-2xl text-aluminium tracking-wider">00</span>
-              <p className="text-sm font-sans text-aluminium">
-                No runs active. Pick a recipe or create a new run to begin research.
-              </p>
+          {activeTab === 'settings' ? (
+            <Settings />
+          ) : (
+            <div className="flex-1 panel p-8 flex flex-col items-center justify-center text-center relative overflow-hidden">
+              <div className="max-w-md flex flex-col items-center gap-3 z-10">
+                <span className="font-dot text-2xl text-aluminium tracking-wider">00</span>
+                <p className="text-sm font-sans text-aluminium">
+                  No runs active. Pick a recipe or create a new run to begin research.
+                </p>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
     </div>
