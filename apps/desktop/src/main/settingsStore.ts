@@ -35,7 +35,7 @@ export class SettingsStore {
       activeProvider: 'openrouter',
       activeModels: {
         openrouter: 'google/gemini-2.5-flash',
-        gemini: 'gemini-1.5-flash',
+        gemini: 'gemini-2.5-flash',
         ollama: 'llama3',
       },
       keys: {},
