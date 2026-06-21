@@ -3,3 +3,4 @@ export function health(): string {
 }
 
 export * from './providers/index.js';
+export * from './browser/index.js';
