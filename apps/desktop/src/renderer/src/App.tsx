@@ -12,12 +12,82 @@ function App(): JSX.Element {
       .catch((err: unknown) => setHealth(`Error: ${err}`));
   }, []);
 
+  const isEngineOk = health === 'murl-engine-ok';
+
   return (
-    <div style={{ padding: '20px', fontFamily: 'sans-serif' }}>
-      <h1>Murl — shell online</h1>
-      <p>
-        Engine status: <strong>{health}</strong>
-      </p>
+    <div className="flex flex-col h-screen overflow-hidden bg-ink select-none font-sans text-chalk bg-dotgrid p-6 gap-6">
+      {/* Top Strip */}
+      <div className="flex items-center justify-between h-8 border-b border-aluminium/20 pb-3">
+        <div className="flex items-baseline gap-3">
+          <span className="font-dot text-lg tracking-[0.12em] text-chalk">MURL</span>
+          <span className="text-xs uppercase tracking-label font-sans text-aluminium">research harness</span>
+        </div>
+        <div className="flex items-center gap-4 text-xs font-mono text-aluminium">
+          <span>v0.1.0</span>
+        </div>
+      </div>
+
+      {/* Main Body */}
+      <div className="flex flex-1 gap-6 min-h-0">
+        {/* Left Sidebar */}
+        <div className="w-[180px] flex flex-col justify-between py-2 shrink-0">
+          <nav className="flex flex-col gap-5 text-sm font-sans tracking-[0.02em]">
+            <a href="#runs" className="text-chalk font-semibold transition-colors duration-150 flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-chalk shadow-active"></span>
+              Runs
+            </a>
+            <a href="#recipes" className="text-aluminium hover:text-chalk transition-colors duration-150 pl-3.5">
+              Recipes
+            </a>
+            <a href="#schedule" className="text-aluminium hover:text-chalk transition-colors duration-150 pl-3.5">
+              Schedule
+            </a>
+            <a href="#library" className="text-aluminium hover:text-chalk transition-colors duration-150 pl-3.5">
+              Library
+            </a>
+          </nav>
+
+          <div className="flex flex-col gap-4">
+            <div className="border-t border-aluminium/20 my-2"></div>
+            <a href="#settings" className="text-sm text-aluminium hover:text-chalk transition-colors duration-150 pl-3.5 font-sans">
+              Settings
+            </a>
+          </div>
+        </div>
+
+        {/* Main Canvas Pane */}
+        <div className="flex-1 flex flex-col gap-6 min-w-0">
+          {/* Status Row Panel */}
+          <div className="panel p-4 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              {/* Glowing status dot */}
+              <span
+                className={`w-2 h-2 rounded-full transition-all duration-500 ${
+                  isEngineOk
+                    ? 'bg-chalk shadow-active'
+                    : 'bg-signal shadow-signal animate-pulse'
+                }`}
+              ></span>
+              <span className="font-dot text-xs tracking-widest text-chalk uppercase mt-0.5">
+                {isEngineOk ? 'ENGINE ONLINE' : 'ENGINE OFFLINE'}
+              </span>
+            </div>
+            <div className="text-xs font-mono text-aluminium">
+              status: <span className="font-sans text-chalk font-medium">{health}</span>
+            </div>
+          </div>
+
+          {/* Large frosted main panel */}
+          <div className="flex-1 panel p-8 flex flex-col items-center justify-center text-center relative overflow-hidden">
+            <div className="max-w-md flex flex-col items-center gap-3 z-10">
+              <span className="font-dot text-2xl text-aluminium tracking-wider">00</span>
+              <p className="text-sm font-sans text-aluminium">
+                No runs active. Pick a recipe or create a new run to begin research.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

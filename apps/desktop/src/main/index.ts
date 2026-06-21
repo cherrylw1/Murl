@@ -22,6 +22,7 @@ function createWindow(): void {
     width: 1100,
     height: 720,
     show: false,
+    backgroundColor: '#0A0A0A',
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -55,6 +56,9 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  // Remove default File/Edit/View menu bar
+  Menu.setApplicationMenu(null);
+
   // Set up IPC handle calling the headless engine health()
   ipcMain.handle('engine:health', () => {
     return health();

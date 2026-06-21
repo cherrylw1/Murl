@@ -1,0 +1,17 @@
+@import "tailwindcss";
+@config "../../../tailwind.config.js";
+
+@layer base {
+  body {
+    @apply bg-ink text-chalk font-sans select-none antialiased;
+    background-image: radial-gradient(rgba(138, 138, 138, 0.06) 1px, transparent 1px);
+    background-size: 8px 8px;
+  }
+}
+
+.panel {
+  background: rgba(22, 22, 22, 0.90); /* carbon @ 90% */
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(138, 138, 138, 0.18); /* hairline */
+  border-radius: 6px;
+}
