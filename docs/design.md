@@ -41,23 +41,23 @@ Transparency (the "see the workings" layer): panels are `carbon` at ~88–92% op
 
 ## 2. Typography
 
-Three roles. **Dots speak for the machine; sans speaks for us; mono carries raw data.** All fonts are OFL (free, commercially safe). **Do not use Nothing's NDot / NDOT 55.**
+Three roles. **Dots speak for the machine; sans speaks for us; mono carries raw data.** Sans and Mono fonts are OFL. Dot font is **LED Counter 7** by Sizenko Alexander (Style-7) with its license readme bundled locally. **Do not use Nothing's NDot / NDOT 55.**
 
 | Role | Font (OFL) | Used for |
 |---|---|---|
-| Signature / dot | **DotMatrix** (or **Departure Mono**) | Agent IDs, counters, costs, timers, status words, big numerals, the Glyph readouts. Restraint — never body. |
+| Signature / dot | **LED Counter 7** (or **Departure Mono**) | Agent IDs, counters, costs, timers, status words, big numerals, the Glyph readouts. Restraint — never body. |
 | Body / UI | **Geist Sans** (fallback Inter) | All sentences, labels, buttons, settings, prose |
 | Data / mono | **Geist Mono** (fallback JetBrains Mono) | Logs, JSON, selectors, URLs, code, the action stream |
 
 Type scale (desktop, 4px-based rhythm):
 
 ```
-display-dot   28 / 32   DotMatrix       (hero numerals, run cost, big status)
+display-dot   28 / 32   LED Counter 7   (hero numerals, run cost, big status)
 title         18 / 24   Geist Sans 600
 body          14 / 20   Geist Sans 450
 label         12 / 16   Geist Sans 500   uppercase, +6% tracking
 data          12 / 18   Geist Mono 400
-micro-dot     10 / 12   DotMatrix        (cell labels, tiny counters)
+micro-dot     10 / 12   LED Counter 7    (cell labels, tiny counters)
 ```
 
 Rules: sentence case for body and buttons; UPPERCASE only for `label` (eyebrows, section tags). Tracking opens slightly on dot and label faces, never on body.
@@ -100,7 +100,7 @@ The thing we'll be remembered for. One cell per agent.
 
 - Surface `carbon`, radius 6px, 1px hairline.
 - A single status **dot** top-left: `aluminium` (idle) → `chalk` + `--glow-active` (active, slow breath 3s) → `signal` + `--glow-signal` (needs-you, 1s pulse).
-- Agent ID in `micro-dot` (DotMatrix): `A1`, `A2`…
+- Agent ID in `micro-dot` (LED Counter 7): `A1`, `A2`…
 - One-line current action in `data` mono, truncated.
 - Live counter row in dot face: rows extracted · turn n/5 · cost.
 - The whole cell is glanceable from across the room — that's the test. No buttons on the cell face; click to open detail.
@@ -146,7 +146,7 @@ export default {
         aluminium: '#8A8A8A', chalk: '#FAFAFA', signal: '#D71921',
       },
       fontFamily: {
-        dot:  ['DotMatrix', 'monospace'],
+        dot:  ['"LED Counter 7"', 'monospace'],
         sans: ['"Geist Sans"', 'Inter', 'system-ui', 'sans-serif'],
         mono: ['"Geist Mono"', '"JetBrains Mono"', 'monospace'],
       },

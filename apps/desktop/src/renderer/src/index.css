@@ -2,8 +2,8 @@
 @config "../../../tailwind.config.js";
 
 @font-face {
-  font-family: 'DotMatrix';
-  src: url('./assets/fonts/DotMatrix-Regular.woff2') format('woff2');
+  font-family: 'LED Counter 7';
+  src: url('./assets/fonts/LEDCounter7-Regular.ttf') format('truetype');
   font-weight: 400;
   font-style: normal;
   font-display: swap;

@@ -15,7 +15,7 @@ export default {
         signal: '#D71921',
       },
       fontFamily: {
-        dot: ['DotMatrix', 'monospace'],
+        dot: ['"LED Counter 7"', 'monospace'],
         sans: ['"Inter Variable"', 'Inter', 'system-ui', 'sans-serif'],
         mono: ['"JetBrains Mono"', 'monospace'],
       },
