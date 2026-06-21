@@ -6,6 +6,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "playwright": "^1.61.0"
+    "playwright": "^1.61.0",
+    "zod": "^4.4.3"
   }
 }
