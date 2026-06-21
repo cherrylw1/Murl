@@ -5,6 +5,6 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   eslintConfigPrettier,
   {
-    ignores: ['**/dist/**', '**/coverage/**', 'node_modules/**'],
+    ignores: ['**/dist/**', '**/out/**', '**/coverage/**', 'node_modules/**'],
   },
 );

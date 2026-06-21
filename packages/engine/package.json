@@ -8,5 +8,8 @@
   "dependencies": {
     "playwright": "^1.61.0",
     "zod": "^4.4.3"
+  },
+  "exports": {
+    ".": "./src/index.ts"
   }
 }
