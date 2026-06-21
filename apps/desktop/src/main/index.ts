@@ -2,8 +2,9 @@ import { app, BrowserWindow, ipcMain, Menu, Tray } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { fileURLToPath } from 'url';
-import { health, createProvider, ProviderId } from '@murl/engine';
+import { health, createProvider, ProviderId, BrowserSession, runAgent } from '@murl/engine';
 import { SettingsStore } from './settingsStore.js';
+import crypto from 'crypto';
 
 // Helper to resolve __dirname in ES Modules (electron-vite compiles main to ESM)
 const __filename = fileURLToPath(import.meta.url);
@@ -12,6 +13,7 @@ const __dirname = path.dirname(__filename);
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
+const activeRuns = new Map<string, BrowserSession>();
 
 function createWindow(): void {
   let preloadPath = path.join(__dirname, '../preload/index.js');
@@ -122,6 +124,167 @@ app.whenReady().then(() => {
       const errorMessage = err instanceof Error ? err.message : String(err);
       return { ok: false, error: errorMessage };
     }
+  });
+
+  // Run/Agent IPC Handlers
+  ipcMain.handle('run:start', async (event, input: { goal: string; url: string }) => {
+    const runId = crypto.randomUUID();
+    console.log(`[MAIN] run:start invoked: id=${runId}, goal="${input.goal}", url="${input.url}"`);
+
+    const settings = store.getSettingsView();
+    const providerId = settings.activeProvider;
+    const model = settings.activeModel;
+    const ollamaBaseUrl = store.getOllamaBaseUrl();
+    const decryptedKey = (providerId === 'openrouter' || providerId === 'gemini')
+      ? store.getDecryptedKey(providerId)
+      : undefined;
+
+    console.log(`[MAIN] Config: provider=${providerId}, model=${model}, hasKey=${!!decryptedKey}`);
+    if (decryptedKey) {
+      console.log(`[MAIN] Decrypted key length=${decryptedKey.length}, prefix="${decryptedKey.substring(0, 6)}"`);
+      try {
+        console.log('[MAIN] Testing Gemini models list...');
+        const testRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${decryptedKey}`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+        console.log(`[MAIN] Gemini response status: ${testRes.status}`);
+        const testText = await testRes.text();
+        console.log(`[MAIN] Gemini response body: ${testText}`);
+      } catch (testErr: any) {
+        console.error('[MAIN] Gemini fetch threw error:', testErr.stack || testErr.message || testErr);
+      }
+
+      // Also test OpenRouter if key is present
+      const orKey = store.getDecryptedKey('openrouter');
+      if (orKey) {
+        console.log(`[MAIN] Decrypted OpenRouter key length=${orKey.length}, prefix="${orKey.substring(0, 6)}"`);
+        try {
+          console.log('[MAIN] Testing OpenRouter fetch...');
+          const orRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${orKey}`,
+              'HTTP-Referer': 'https://github.com/murl',
+              'X-Title': 'Murl Desktop'
+            },
+            body: JSON.stringify({
+              model: 'google/gemini-2.5-flash',
+              messages: [{ role: 'user', content: 'Hello' }]
+            })
+          });
+          console.log(`[MAIN] OpenRouter response status: ${orRes.status}`);
+          const orText = await orRes.text();
+          console.log(`[MAIN] OpenRouter response body: ${orText}`);
+        } catch (orErr: any) {
+          console.error('[MAIN] OpenRouter fetch threw error:', orErr.stack || orErr.message || orErr);
+        }
+      }
+    }
+
+    if ((providerId === 'openrouter' || providerId === 'gemini') && !decryptedKey) {
+      console.error(`[MAIN] Error: Provider key not configured`);
+      setTimeout(() => {
+        event.sender.send('run:event', {
+          type: 'error',
+          runId,
+          message: 'No provider configured — set one in Settings',
+        });
+      }, 50);
+      return { runId };
+    }
+
+    // Run the agent run asynchronously in the background
+    (async () => {
+      // Give the renderer a tiny bit of time to subscribe to events
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      event.sender.send('run:event', { type: 'started', runId });
+      event.sender.send('run:event', { type: 'status', runId, status: 'running' });
+
+      let session: BrowserSession | null = null;
+      try {
+        console.log(`[MAIN] Building provider...`);
+        const provider = createProvider(providerId, {
+          apiKey: decryptedKey,
+          baseUrl: providerId === 'ollama' ? ollamaBaseUrl : undefined
+        });
+
+        console.log(`[MAIN] Launching browser session...`);
+        session = await BrowserSession.launch({ headless: true });
+        activeRuns.set(runId, session);
+
+        console.log(`[MAIN] Navigating to: ${input.url}`);
+        await session.goto(input.url);
+        console.log(`[MAIN] Navigation complete.`);
+
+        console.log(`[MAIN] Executing runAgent...`);
+        const runResult = await runAgent({
+          goal: input.goal,
+          url: input.url,
+          provider,
+          model,
+          session,
+          onStep: async ({ turn, reasoning, action, screenshot }) => {
+            console.log(`[MAIN] onStep: turn=${turn}, action=${action.action}, reasoning="${reasoning || ''}"`);
+            let dataUrl: string | undefined = undefined;
+            if (screenshot) {
+              dataUrl = `data:image/png;base64,${screenshot.toString('base64')}`;
+            }
+            event.sender.send('run:event', {
+              type: 'step',
+              runId,
+              turn,
+              reasoning,
+              action,
+              screenshot: dataUrl,
+            });
+          },
+        });
+
+        console.log(`[MAIN] runAgent finished: status=${runResult.status}`);
+
+        if (runResult.status === 'complete') {
+          event.sender.send('run:event', { type: 'done', runId, extracted: runResult.extracted });
+          event.sender.send('run:event', { type: 'status', runId, status: 'done' });
+        } else if (runResult.status === 'error') {
+          event.sender.send('run:event', { type: 'error', runId, message: runResult.error || 'Unknown error occurred' });
+          event.sender.send('run:event', { type: 'status', runId, status: 'error' });
+        } else {
+          event.sender.send('run:event', { type: 'status', runId, status: 'done' });
+          event.sender.send('run:event', { type: 'done', runId, extracted: runResult.extracted });
+        }
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[MAIN] Exception occurred during run:`, message);
+        event.sender.send('run:event', { type: 'error', runId, message });
+        event.sender.send('run:event', { type: 'status', runId, status: 'error' });
+      } finally {
+        if (session) {
+          console.log(`[MAIN] Closing browser session...`);
+          await session.close().catch(() => {});
+        }
+        activeRuns.delete(runId);
+        console.log(`[MAIN] Run cleaned up.`);
+      }
+    })().catch(err => {
+      console.error('[MAIN] Background agent run failed:', err);
+    });
+
+    return { runId };
+  });
+
+  ipcMain.handle('run:cancel', async (_event, runId: string) => {
+    const session = activeRuns.get(runId);
+    if (session) {
+      await session.close().catch(() => {});
+      activeRuns.delete(runId);
+      return { ok: true };
+    }
+    return { ok: false };
   });
 
   createWindow();

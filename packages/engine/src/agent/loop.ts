@@ -28,6 +28,12 @@ export interface RunOptions {
   maxTurns?: number; // default 5
   session?: BrowserSession;
   recorder?: Recorder;
+  onStep?: (s: {
+    turn: number;
+    reasoning?: string;
+    action: Action;
+    screenshot?: Buffer;
+  }) => void | Promise<void>;
 }
 
 function cleanJsonText(text: string): string {
@@ -154,8 +160,12 @@ export async function runAgent(opts: RunOptions): Promise<RunResult> {
           note: errorMsg,
         });
 
+        let shot: Buffer | undefined = undefined;
+        if (opts.recorder || opts.onStep) {
+          shot = await session.screenshot().catch(() => undefined);
+        }
+
         if (opts.recorder && runId) {
-          const shot = await session.screenshot().catch(() => undefined);
           opts.recorder.recordStep({
             runId,
             turn,
@@ -166,6 +176,19 @@ export async function runAgent(opts: RunOptions): Promise<RunResult> {
             screenshot: shot,
           });
           opts.recorder.finishRun(runId, { status: 'error', error: errorMsg });
+        }
+
+        if (opts.onStep) {
+          try {
+            await opts.onStep({
+              turn,
+              reasoning: 'LLM completion failed',
+              action: dummyAction,
+              screenshot: shot,
+            });
+          } catch (e) {
+            console.error('Error in onStep callback:', e);
+          }
         }
 
         return { status: 'error', steps, extracted, error: errorMsg };
@@ -197,8 +220,12 @@ export async function runAgent(opts: RunOptions): Promise<RunResult> {
           note: errorMsg,
         });
 
+        let shot: Buffer | undefined = undefined;
+        if (opts.recorder || opts.onStep) {
+          shot = await session.screenshot().catch(() => undefined);
+        }
+
         if (opts.recorder && runId) {
-          const shot = await session.screenshot().catch(() => undefined);
           opts.recorder.recordStep({
             runId,
             turn,
@@ -210,6 +237,19 @@ export async function runAgent(opts: RunOptions): Promise<RunResult> {
             usage,
           });
           opts.recorder.finishRun(runId, { status: 'error', error: errorMsg });
+        }
+
+        if (opts.onStep) {
+          try {
+            await opts.onStep({
+              turn,
+              reasoning: 'Failed to parse action JSON',
+              action: dummyAction,
+              screenshot: shot,
+            });
+          } catch (e) {
+            console.error('Error in onStep callback:', e);
+          }
         }
 
         return { status: 'error', steps, extracted, error: errorMsg };
@@ -225,8 +265,12 @@ export async function runAgent(opts: RunOptions): Promise<RunResult> {
         note: applyRes.note,
       });
 
+      let shot: Buffer | undefined = undefined;
+      if (opts.recorder || opts.onStep) {
+        shot = await session.screenshot().catch(() => undefined);
+      }
+
       if (opts.recorder && runId) {
-        const shot = await session.screenshot().catch(() => undefined);
         opts.recorder.recordStep({
           runId,
           turn,
@@ -237,6 +281,19 @@ export async function runAgent(opts: RunOptions): Promise<RunResult> {
           screenshot: shot,
           usage,
         });
+      }
+
+      if (opts.onStep) {
+        try {
+          await opts.onStep({
+            turn,
+            reasoning: thought,
+            action,
+            screenshot: shot,
+          });
+        } catch (e) {
+          console.error('Error in onStep callback:', e);
+        }
       }
 
       if (applyRes.done) {

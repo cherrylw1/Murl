@@ -11,4 +11,16 @@ contextBridge.exposeInMainWorld('murl', {
     setOllamaBaseUrl: (url: string) => ipcRenderer.invoke('settings:setOllamaBaseUrl', url),
     test: (id: ProviderId) => ipcRenderer.invoke('settings:test', id),
   },
+  runs: {
+    start: (input: { goal: string; url: string }) => ipcRenderer.invoke('run:start', input),
+    cancel: (runId: string) => ipcRenderer.invoke('run:cancel', runId),
+    onEvent: (cb: (e: any) => void) => {
+      const wrapper = (_event: any, payload: any) => cb(payload);
+      ipcRenderer.on('run:event', wrapper);
+      return () => {
+        ipcRenderer.removeListener('run:event', wrapper);
+      };
+    },
+  },
 });
+

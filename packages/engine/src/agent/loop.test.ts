@@ -117,6 +117,41 @@ describe('runAgent Loop', () => {
     expect(result.steps[0].note).toContain('Unexpected token');
   });
 
+  it('T4 onStep callback: calls the callback on each step with reasoning, action and screenshot', async () => {
+    session = await BrowserSession.launch({ headless: true });
+    await session.setContent('<button>Submit</button><input type="text" />');
+
+    const provider = new FakeProvider([
+      '{"action": "type", "ref": 1, "text": "hello", "thought": "Typing hello"}',
+      '{"action": "complete", "result": {"done": true}, "thought": "Finished successfully"}',
+    ]);
+
+    const stepEvents: any[] = [];
+    const result = await runAgent({
+      goal: 'Type hello and complete',
+      url: 'about:blank',
+      provider,
+      model: 'test-model',
+      session,
+      maxTurns: 3,
+      onStep: (step) => {
+        stepEvents.push(step);
+      },
+    });
+
+    expect(result.status).toBe('complete');
+    expect(stepEvents).toHaveLength(2);
+    expect(stepEvents[0].turn).toBe(1);
+    expect(stepEvents[0].reasoning).toBe('Typing hello');
+    expect(stepEvents[0].action).toEqual({
+      action: 'type',
+      ref: 1,
+      text: 'hello',
+      thought: 'Typing hello',
+    });
+    expect(stepEvents[0].screenshot).toBeDefined();
+  });
+
   describe('parseAction Unit Tests', () => {
     it('successfully parses a valid action', () => {
       const valid = { action: 'click', ref: 5, thought: 'Let us click ref 5' };

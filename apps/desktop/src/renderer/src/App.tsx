@@ -2,6 +2,9 @@
 /// <reference path="../../preload/index.d.ts" />
 import React, { useEffect, useState } from 'react';
 import Settings from './components/Settings';
+import Runs from './components/Runs';
+
+
 
 function App(): JSX.Element {
   const [health, setHealth] = useState<string>('loading...');
@@ -151,8 +154,10 @@ function App(): JSX.Element {
           {/* Large frosted main panel */}
           {activeTab === 'settings' ? (
             <Settings />
+          ) : activeTab === 'runs' ? (
+            <Runs onNavigateToSettings={() => setActiveTab('settings')} />
           ) : (
-            <div className="flex-1 panel p-8 flex flex-col items-center justify-center text-center relative overflow-hidden">
+            <div className="flex-1 panel p-8 flex flex-col items-center justify-center text-center relative overflow-hidden bg-dotgrid bg-repeat">
               <div className="max-w-md flex flex-col items-center gap-3 z-10">
                 <span className="font-dot text-2xl text-aluminium tracking-wider">00</span>
                 <p className="text-sm font-sans text-aluminium">

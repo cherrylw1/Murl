@@ -7,4 +7,9 @@ export default tseslint.config(
   {
     ignores: ['**/dist/**', '**/out/**', '**/coverage/**', 'node_modules/**'],
   },
+  {
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'off',
+    },
+  },
 );

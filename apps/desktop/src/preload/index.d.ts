@@ -10,9 +10,21 @@ interface SettingsView {
   };
 }
 
+interface RunInput {
+  goal: string;
+  url: string;
+}
+
+type RunEvent =
+  | { type: 'started';  runId: string }
+  | { type: 'status';   runId: string; status: 'running' | 'done' | 'error' | 'needs_human' }
+  | { type: 'step';     runId: string; turn: number; reasoning?: string; action: import('@murl/engine').Action; screenshot?: string }
+  | { type: 'done';     runId: string; extracted: unknown }
+  | { type: 'error';    runId: string; message: string };
+
 interface Window {
   murl: {
-    engineHealth: () => Promise<string>;
+    engineHealth(): Promise<string>;
     settings: {
       get(): Promise<SettingsView>;
       setKey(id: ProviderId, key: string): Promise<{ ok: boolean }>;
@@ -23,3 +35,9 @@ interface Window {
     };
   };
 }
+
+
+
+
+
+
