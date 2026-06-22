@@ -1,13 +1,12 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { SettingsView } from './Settings';
 
-
 export interface RunInput {
   goal: string;
   url: string;
 }
 
-export type RunStatus = 'running' | 'done' | 'error' | 'needs_human';
+export type RunStatus = 'queued' | 'running' | 'done' | 'error' | 'needs_human';
 
 export interface Action {
   action: string;
@@ -21,9 +20,39 @@ export type RunEvent =
   | { type: 'done'; runId: string; extracted: unknown }
   | { type: 'error'; runId: string; message: string };
 
+export interface RunState {
+  runId: string;
+  goal: string;
+  url: string;
+  status: RunStatus;
+  currentTurn?: number;
+  lastScreenshot?: string;
+  error?: string;
+}
+
+export interface RunStep {
+  turn: number;
+  reasoning?: string;
+  action: Action;
+  screenshot?: string;
+}
+
+export interface RunDetail {
+  id: string;
+  goal: string;
+  url: string;
+  status: string;
+  startedAt: number;
+  finishedAt?: number;
+  steps: RunStep[];
+  extracted?: any;
+  error?: string;
+}
+
 interface MurlRunsAPI {
   start(input: RunInput): Promise<{ runId: string }>;
   cancel(runId: string): Promise<{ ok: boolean }>;
+  getState(): Promise<RunState[]>;
   onEvent(cb: (e: RunEvent) => void): () => void;
 }
 
@@ -34,12 +63,6 @@ interface RunsProps {
   onNavigateToSettings: () => void;
 }
 
-interface ActionStep {
-  turn: number;
-  reasoning?: string;
-  action: Action;
-}
-
 const styles = `
 @keyframes breath {
   0%, 100% { opacity: 0.55; }
@@ -48,8 +71,25 @@ const styles = `
 .breath {
   animation: breath 3s ease-in-out infinite;
 }
+@keyframes pulse-glow {
+  0%, 100% {
+    opacity: 0.6;
+    box-shadow: 0 0 4px rgba(250, 250, 250, 0.2);
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 12px rgba(250, 250, 250, 0.6);
+  }
+}
+.pulse-glow {
+  animation: pulse-glow 2s infinite ease-in-out;
+}
 @media (prefers-reduced-motion: reduce) {
   .breath {
+    animation: none;
+    opacity: 1;
+  }
+  .pulse-glow {
     animation: none;
     opacity: 1;
   }
@@ -92,28 +132,22 @@ export default function Runs({ onNavigateToSettings }: RunsProps): JSX.Element {
   const [isConfigured, setIsConfigured] = useState(false);
   const [isLoadingSettings, setIsLoadingSettings] = useState(true);
 
-  // Run states
-  const [runId, setRunId] = useState<string | null>(null);
-  const [status, setStatus] = useState<'idle' | 'running' | 'done' | 'error' | 'needs_human'>('idle');
-  const [actionLog, setActionLog] = useState<ActionStep[]>([]);
-  const [latestScreenshot, setLatestScreenshot] = useState<string | null>(null);
-  const [extractedData, setExtractedData] = useState<any | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  // Active runs (Dashboard state)
+  const [activeRuns, setActiveRuns] = useState<RunState[]>([]);
+
+  // Selected run for Detail View
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [detailRun, setDetailRun] = useState<RunDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [selectedStepTurn, setSelectedStepTurn] = useState<number | null>(null);
   const [isCancelling, setIsCancelling] = useState(false);
 
   // Auto-scroll ref & state
   const logEndRef = useRef<HTMLDivElement>(null);
   const [isHovered, setIsHovered] = useState(false);
 
-  // IPC Subscription Ref
-  const unsubscribeRef = useRef<(() => void) | null>(null);
-
   // History states
   const [historyList, setHistoryList] = useState<any[]>([]);
-  const [isReplay, setIsReplay] = useState(false);
-  const [replayLoading, setReplayLoading] = useState(false);
-  const [replayData, setReplayData] = useState<any | null>(null);
-  const [selectedStepTurn, setSelectedStepTurn] = useState<number | null>(null);
 
   const fetchHistory = async () => {
     try {
@@ -121,6 +155,15 @@ export default function Runs({ onNavigateToSettings }: RunsProps): JSX.Element {
       setHistoryList(list || []);
     } catch (err) {
       console.error('Failed to fetch history list:', err);
+    }
+  };
+
+  const refreshActiveRuns = async () => {
+    try {
+      const runs = await getMurlRuns().getState();
+      setActiveRuns(runs || []);
+    } catch (err) {
+      console.error('Failed to get active runs:', err);
     }
   };
 
@@ -150,140 +193,176 @@ export default function Runs({ onNavigateToSettings }: RunsProps): JSX.Element {
   useEffect(() => {
     checkSettings();
     fetchHistory();
+    refreshActiveRuns();
   }, []);
 
-  // Auto scroll effect
+  // Auto scroll effect in Detail View
   useEffect(() => {
     if (!isHovered && logEndRef.current) {
       logEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [actionLog, isHovered]);
+  }, [detailRun?.steps, isHovered]);
 
-  const cleanupSubscription = () => {
-    if (unsubscribeRef.current) {
-      unsubscribeRef.current();
-      unsubscribeRef.current = null;
-    }
-  };
-
-  // Clean up subscription on unmount
+  // Global event listener subscription
   useEffect(() => {
+    const unsub = getMurlRuns().onEvent((event: RunEvent) => {
+      // Update activeRuns state
+      setActiveRuns((prev) => {
+        const exists = prev.some((r) => r.runId === event.runId);
+        if (!exists) {
+          refreshActiveRuns();
+          return prev;
+        }
+        return prev.map((r) => {
+          if (r.runId !== event.runId) return r;
+          const updated = { ...r };
+          if (event.type === 'status') {
+            updated.status = event.status;
+          } else if (event.type === 'step') {
+            updated.currentTurn = event.turn;
+            if (event.screenshot) {
+              updated.lastScreenshot = event.screenshot;
+            }
+          } else if (event.type === 'done') {
+            updated.status = 'done';
+          } else if (event.type === 'error') {
+            updated.status = 'error';
+            updated.error = event.message;
+          }
+          return updated;
+        });
+      });
+
+      // Update history if complete
+      if (event.type === 'done' || event.type === 'error') {
+        fetchHistory();
+      }
+
+      // If we are looking at this specific run in detail view, update detailRun
+      if (selectedRunId && event.runId === selectedRunId) {
+        setDetailRun((prev) => {
+          if (!prev) return null;
+          const updated = { ...prev };
+          if (event.type === 'status') {
+            updated.status = event.status;
+          } else if (event.type === 'step') {
+            const stepExists = updated.steps.some((s) => s.turn === event.turn);
+            const newStep: RunStep = {
+              turn: event.turn,
+              reasoning: event.reasoning,
+              action: event.action,
+              screenshot: event.screenshot,
+            };
+            if (!stepExists) {
+              updated.steps = [...updated.steps, newStep];
+            } else {
+              updated.steps = updated.steps.map((s) => (s.turn === event.turn ? newStep : s));
+            }
+          } else if (event.type === 'done') {
+            updated.status = 'done';
+            updated.extracted = event.extracted;
+          } else if (event.type === 'error') {
+            updated.status = 'error';
+            updated.error = event.message;
+          }
+          return updated;
+        });
+      }
+    });
+
     return () => {
-      cleanupSubscription();
+      unsub();
     };
-  }, []);
+  }, [selectedRunId]);
 
   const handleRunStart = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isConfigured || isLoadingSettings) return;
 
-    // Reset states
-    setActionLog([]);
-    setLatestScreenshot(null);
-    setExtractedData(null);
-    setErrorMessage(null);
-    setIsCancelling(false);
-    setStatus('running');
+    const currentGoal = goal;
+    const currentUrl = url;
+
+    // Reset goal input immediately so user can submit another task
+    setGoal('');
 
     try {
-      const res = await getMurlRuns().start({ goal, url });
-      const currentRunId = res.runId;
-      setRunId(currentRunId);
-
-      cleanupSubscription();
-
-      // Subscribe to events
-      const unsub = getMurlRuns().onEvent((event: RunEvent) => {
-        if (event.runId !== currentRunId) return;
-
-        if (event.type === 'started') {
-          setStatus('running');
-        } else if (event.type === 'status') {
-          setStatus(event.status);
-        } else if (event.type === 'step') {
-          setActionLog((prev) => {
-            if (prev.some((s) => s.turn === event.turn)) return prev;
-            return [...prev, {
-              turn: event.turn,
-              reasoning: event.reasoning,
-              action: event.action
-            }];
-          });
-          if (event.screenshot) {
-            setLatestScreenshot(event.screenshot);
-          }
-        } else if (event.type === 'done') {
-          setStatus('done');
-          setExtractedData(event.extracted);
-          cleanupSubscription();
-        } else if (event.type === 'error') {
-          setStatus('error');
-          setErrorMessage(event.message);
-          cleanupSubscription();
-        }
-      });
-
-      unsubscribeRef.current = unsub;
+      await getMurlRuns().start({ goal: currentGoal, url: currentUrl });
+      await refreshActiveRuns();
     } catch (err: any) {
       console.error('Failed to start agent run', err);
-      setStatus('error');
-      setErrorMessage(err.message || String(err));
     }
   };
 
-  const handleCancel = async () => {
-    if (!runId) return;
+  const handleCancelRun = async (id: string) => {
     setIsCancelling(true);
     try {
-      await getMurlRuns().cancel(runId);
+      await getMurlRuns().cancel(id);
     } catch (err: any) {
       console.error('Failed to cancel agent run', err);
-      setStatus('error');
-      setErrorMessage(`Cancellation failed: ${err.message || String(err)}`);
-      cleanupSubscription();
+    } finally {
+      setIsCancelling(false);
     }
   };
 
-  const handleBackToIdle = () => {
-    setRunId(null);
-    setStatus('idle');
-    setActionLog([]);
-    setLatestScreenshot(null);
-    setExtractedData(null);
-    setErrorMessage(null);
-    setIsCancelling(false);
-    setIsReplay(false);
-    setReplayData(null);
-    setSelectedStepTurn(null);
-    checkSettings();
-    fetchHistory();
-  };
-
-  const handleBackFromReplay = () => {
-    setIsReplay(false);
-    setReplayData(null);
-    setSelectedStepTurn(null);
-    fetchHistory();
-  };
-
-  const handleRowClick = async (runIdStr: string) => {
-    setIsReplay(true);
-    setReplayLoading(true);
-    setReplayData(null);
+  const handleCardClick = async (runIdStr: string) => {
+    setSelectedRunId(runIdStr);
+    setDetailLoading(true);
+    setDetailRun(null);
     setSelectedStepTurn(null);
     try {
       const data = await (window as any).murl.history.get(runIdStr);
-      setReplayData(data);
+      if (data) {
+        setDetailRun(data);
+      } else {
+        // Fallback for queued runs that don't have records in history DB yet
+        const active = activeRuns.find((r) => r.runId === runIdStr);
+        if (active) {
+          setDetailRun({
+            id: runIdStr,
+            goal: active.goal,
+            url: active.url,
+            status: active.status,
+            startedAt: Date.now(),
+            steps: [],
+          });
+        }
+      }
     } catch (err) {
       console.error('Failed to get run details:', err);
     } finally {
-      setReplayLoading(false);
+      setDetailLoading(false);
     }
   };
 
-  // Render States
-  if (isReplay) {
-    if (replayLoading) {
+  function renderStatusDot(status: string) {
+    let colorClass = '';
+    let shadowStyle = {};
+    let pulseClass = '';
+
+    if (status === 'queued') {
+      colorClass = 'bg-[#8A8A8A]';
+    } else if (status === 'running' || status === 'needs_human') {
+      colorClass = 'bg-[#FAFAFA]';
+      shadowStyle = { boxShadow: '0 0 12px rgba(250, 250, 250, 0.5)' };
+      pulseClass = 'pulse-glow';
+    } else if (status === 'done' || status === 'complete') {
+      colorClass = 'bg-[#FAFAFA]';
+    } else if (status === 'error') {
+      colorClass = 'bg-[#D71921]';
+      shadowStyle = { boxShadow: '0 0 12px rgba(215, 25, 33, 0.5)' };
+    }
+
+    return (
+      <span
+        className={`w-2 h-2 rounded-full ${colorClass} ${pulseClass}`}
+        style={shadowStyle}
+      />
+    );
+  }
+
+  // --- DETAIL VIEW ---
+  if (selectedRunId) {
+    if (detailLoading) {
       return (
         <div className="flex-1 panel p-8 flex flex-col items-center justify-center bg-dotgrid bg-repeat min-h-0">
           <div className="flex flex-col items-center gap-3 text-center">
@@ -294,7 +373,7 @@ export default function Runs({ onNavigateToSettings }: RunsProps): JSX.Element {
       );
     }
 
-    if (!replayData || !replayData.run) {
+    if (!detailRun) {
       return (
         <div className="flex-1 panel p-8 flex flex-col items-center justify-center bg-dotgrid bg-repeat min-h-0">
           <div className="max-w-md w-full panel p-8 flex flex-col gap-6 text-left relative bg-carbon border-signal/30">
@@ -307,10 +386,13 @@ export default function Runs({ onNavigateToSettings }: RunsProps): JSX.Element {
             </p>
             <div className="flex justify-end mt-2">
               <button
-                onClick={handleBackFromReplay}
+                onClick={() => {
+                  setSelectedRunId(null);
+                  setDetailRun(null);
+                }}
                 className="px-5 py-2.5 text-xs font-sans uppercase tracking-label bg-carbon text-chalk border border-aluminium/40 hover:border-chalk hover:shadow-active rounded transition-all duration-150 cursor-pointer"
               >
-                Back to History
+                Back to Dashboard
               </button>
             </div>
           </div>
@@ -318,30 +400,17 @@ export default function Runs({ onNavigateToSettings }: RunsProps): JSX.Element {
       );
     }
 
-    const { run, steps } = replayData;
-
     // Get the screenshot of the active/selected step
-    let activeScreenshot: string | null = null;
+    let activeScreenshot: string | undefined = undefined;
     if (selectedStepTurn !== null) {
-      const activeStep = steps.find((s: any) => s.turn === selectedStepTurn);
-      activeScreenshot = activeStep?.screenshot || null;
+      const activeStep = detailRun.steps.find((s: any) => s.turn === selectedStepTurn);
+      activeScreenshot = activeStep?.screenshot;
     } else {
       // Find the last step with a screenshot
-      const stepsWithScreenshots = steps.filter((s: any) => s.screenshot);
+      const stepsWithScreenshots = detailRun.steps.filter((s: any) => s.screenshot);
       if (stepsWithScreenshots.length > 0) {
         activeScreenshot = stepsWithScreenshots[stepsWithScreenshots.length - 1].screenshot;
       }
-    }
-
-    // Determine the status class/styling for the header status dot
-    let headerDotClass = 'bg-aluminium';
-    let headerDotStyle = {};
-    if (run.status === 'done' || run.status === 'complete') {
-      headerDotClass = 'bg-chalk';
-      headerDotStyle = { boxShadow: '0 0 8px #FAFAFA' };
-    } else if (run.status === 'error') {
-      headerDotClass = 'bg-signal';
-      headerDotStyle = { boxShadow: '0 0 8px #D71921' };
     }
 
     return (
@@ -351,41 +420,62 @@ export default function Runs({ onNavigateToSettings }: RunsProps): JSX.Element {
         {/* Header bar */}
         <div className="flex items-center justify-between pb-4 border-b border-aluminium/20">
           <div className="flex items-center gap-3">
-            <span
-              className={`w-2.5 h-2.5 rounded-full ${headerDotClass}`}
-              style={headerDotStyle}
-            ></span>
+            {renderStatusDot(detailRun.status)}
             <span className="font-dot text-lg tracking-widest text-chalk uppercase mt-0.5">
-              REPLAY: {getHostname(run.start_url || run.url)}
+              {detailRun.status === 'queued' && 'QUEUED: '}
+              {detailRun.status === 'running' && 'RUNNING: '}
+              {detailRun.status === 'needs_human' && 'ATTENTION REQUIRED: '}
+              {detailRun.status === 'done' && 'DONE: '}
+              {detailRun.status === 'error' && 'FAILED: '}
+              {getHostname(detailRun.url)}
             </span>
           </div>
-          <button
-            onClick={handleBackFromReplay}
-            className="px-3 py-1.5 text-xs font-sans text-chalk bg-transparent border border-aluminium/40 hover:border-chalk hover:shadow-active rounded transition-all duration-150 cursor-pointer uppercase tracking-label"
-          >
-            Back
-          </button>
+          <div className="flex items-center gap-2">
+            {(detailRun.status === 'running' || detailRun.status === 'queued' || detailRun.status === 'needs_human') && (
+              <button
+                onClick={() => handleCancelRun(detailRun.id)}
+                disabled={isCancelling}
+                className="px-3 py-1.5 text-xs font-sans text-signal bg-transparent border border-signal/20 hover:border-signal/50 hover:shadow-signal rounded transition-all duration-150 cursor-pointer uppercase tracking-label"
+              >
+                {isCancelling ? 'CANCELLING...' : 'Cancel run'}
+              </button>
+            )}
+            <button
+              onClick={() => {
+                setSelectedRunId(null);
+                setDetailRun(null);
+                setSelectedStepTurn(null);
+              }}
+              className="px-3 py-1.5 text-xs font-sans text-chalk bg-transparent border border-aluminium/40 hover:border-chalk hover:shadow-active rounded transition-all duration-150 cursor-pointer uppercase tracking-label"
+            >
+              Back to dashboard
+            </button>
+          </div>
         </div>
 
         {/* Run Metadata display */}
         <div className="p-4 bg-carbon border border-aluminium/20 rounded flex flex-col gap-2">
           <div className="flex flex-col gap-1">
             <span className="text-[10px] uppercase tracking-label font-sans text-aluminium">Research Goal</span>
-            <span className="text-xs font-sans text-chalk">{run.goal}</span>
+            <span className="text-xs font-sans text-chalk">{detailRun.goal}</span>
           </div>
           <div className="flex items-center gap-6 mt-1 text-[10px] font-mono text-aluminium uppercase tracking-wider">
             <div>
-              <span className="text-aluminium/60 mr-1.5">PROVIDER:</span>
-              <span className="text-chalk font-semibold uppercase">{run.provider_id}</span>
+              <span className="text-aluminium/60 mr-1.5">START URL:</span>
+              <span className="text-chalk font-semibold truncate max-w-md inline-block align-bottom">{detailRun.url}</span>
             </div>
-            <div>
-              <span className="text-aluminium/60 mr-1.5">MODEL:</span>
-              <span className="text-chalk">{run.model}</span>
-            </div>
-            <div>
-              <span className="text-aluminium/60 mr-1.5">STARTED:</span>
-              <span className="text-chalk">{new Date(run.created_at).toLocaleString()}</span>
-            </div>
+            {detailRun.startedAt && (
+              <div>
+                <span className="text-aluminium/60 mr-1.5">STARTED:</span>
+                <span className="text-chalk">{new Date(detailRun.startedAt).toLocaleString()}</span>
+              </div>
+            )}
+            {detailRun.finishedAt && (
+              <div>
+                <span className="text-aluminium/60 mr-1.5">FINISHED:</span>
+                <span className="text-chalk">{new Date(detailRun.finishedAt).toLocaleString()}</span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -395,14 +485,14 @@ export default function Runs({ onNavigateToSettings }: RunsProps): JSX.Element {
           <div className="flex flex-col gap-2 min-h-0">
             <div className="flex items-center justify-between">
               <span className="text-xs uppercase tracking-label font-sans text-aluminium">
-                {selectedStepTurn !== null ? `Step ${selectedStepTurn} Screenshot` : 'Final Screenshot'}
+                {selectedStepTurn !== null ? `Step ${selectedStepTurn} Screenshot` : 'Latest Screenshot'}
               </span>
               {selectedStepTurn !== null && (
                 <button
                   onClick={() => setSelectedStepTurn(null)}
                   className="text-[10px] uppercase tracking-label font-sans text-aluminium hover:text-chalk transition-colors bg-transparent border-0 cursor-pointer"
                 >
-                  Show Final
+                  Show latest
                 </button>
               )}
             </div>
@@ -416,7 +506,9 @@ export default function Runs({ onNavigateToSettings }: RunsProps): JSX.Element {
               ) : (
                 <div className="flex flex-col items-center gap-2 text-center">
                   <span className="font-dot text-xl text-aluminium/40 tracking-widest animate-pulse">...</span>
-                  <span className="text-xs font-sans text-aluminium/60 uppercase tracking-label">No screenshot recorded for this step</span>
+                  <span className="text-xs font-sans text-aluminium/60 uppercase tracking-label">
+                    {detailRun.status === 'queued' ? 'Waiting for execution to start' : 'No screenshot recorded'}
+                  </span>
                 </div>
               )}
             </div>
@@ -426,16 +518,20 @@ export default function Runs({ onNavigateToSettings }: RunsProps): JSX.Element {
           <div className="flex flex-col gap-6 min-h-0">
             {/* Action Log */}
             <div className="flex flex-col gap-2 min-h-0 flex-1">
-              <span className="text-xs uppercase tracking-label font-sans text-aluminium">Action Stream (Click step to view screenshot)</span>
+              <span className="text-xs uppercase tracking-label font-sans text-aluminium font-semibold">
+                Action Stream (Click step to view screenshot)
+              </span>
               <div
+                onMouseEnter={() => setIsHovered(true)}
+                onMouseLeave={() => setIsHovered(false)}
                 className="flex-1 bg-well/50 backdrop-blur-sm border border-aluminium/20 rounded p-4 font-mono text-xs overflow-y-auto flex flex-col gap-3 min-h-[250px]"
               >
-                {steps.length === 0 ? (
+                {detailRun.steps.length === 0 ? (
                   <div className="text-aluminium/40 italic font-mono text-xs uppercase tracking-wider p-2">
-                    No actions recorded for this run.
+                    {detailRun.status === 'queued' ? 'Run is queued. Waiting to start...' : 'No actions recorded.'}
                   </div>
                 ) : (
-                  steps.map((step: any) => {
+                  detailRun.steps.map((step: any) => {
                     const turnStr = String(step.turn).padStart(2, '0');
                     const actionType = step.action?.action || 'unknown';
                     const actionDetails = Object.entries(step.action || {})
@@ -451,7 +547,7 @@ export default function Runs({ onNavigateToSettings }: RunsProps): JSX.Element {
                         onClick={() => setSelectedStepTurn(step.turn)}
                         className={`flex flex-col gap-1.5 border-b border-aluminium/5 pb-2.5 last:border-0 last:pb-0 cursor-pointer p-1.5 rounded transition-all duration-150 ${
                           isSelected
-                            ? 'bg-carbon border-aluminium/20 shadow-active'
+                            ? 'bg-carbon border border-aluminium/20 shadow-active'
                             : 'hover:bg-carbon/40'
                         }`}
                       >
@@ -461,7 +557,7 @@ export default function Runs({ onNavigateToSettings }: RunsProps): JSX.Element {
                             <span className="font-mono text-xs text-aluminium/60 bg-carbon px-1.5 py-0.5 rounded mr-2">
                               T{turnStr}
                             </span>
-                            {step.thought || step.reasoning || '(no thought)'}
+                            {step.reasoning || '(no thought)'}
                           </div>
                           {step.screenshot && (
                             <span className="text-[9px] text-aluminium/50 uppercase tracking-wider self-center">
@@ -482,24 +578,25 @@ export default function Runs({ onNavigateToSettings }: RunsProps): JSX.Element {
                     );
                   })
                 )}
+                <div ref={logEndRef} />
               </div>
             </div>
 
             {/* Extracted Data / Error Message Section */}
-            {(run.status === 'done' || run.status === 'complete' || run.result_json || run.error) && (
+            {(detailRun.status === 'done' || detailRun.status === 'complete' || detailRun.extracted || detailRun.error) && (
               <div className="flex flex-col gap-2 flex-shrink-0">
-                {run.status === 'error' || run.error ? (
+                {detailRun.status === 'error' || detailRun.error ? (
                   <div className="flex flex-col gap-2">
                     <span className="text-xs uppercase tracking-label font-sans text-aluminium">Error Message</span>
                     <div className="text-xs font-mono text-signal bg-signal/5 border border-signal/20 p-4 rounded overflow-auto max-h-[150px] whitespace-pre-wrap">
-                      {run.error || 'An unknown error occurred during execution.'}
+                      {detailRun.error || 'An unknown error occurred during execution.'}
                     </div>
                   </div>
                 ) : (
                   <div className="flex flex-col gap-2">
                     <span className="text-xs uppercase tracking-label font-sans text-aluminium">Extracted Data</span>
                     <pre className="text-xs font-mono text-chalk bg-well/80 p-4 border border-aluminium/20 rounded overflow-auto max-h-[180px] whitespace-pre-wrap break-all">
-                      {JSON.stringify(run.result || (run.result_json ? JSON.parse(run.result_json) : null), null, 2)}
+                      {JSON.stringify(detailRun.extracted, null, 2)}
                     </pre>
                   </div>
                 )}
@@ -511,317 +608,222 @@ export default function Runs({ onNavigateToSettings }: RunsProps): JSX.Element {
     );
   }
 
-  // Render States
-  if (status === 'idle') {
-    return (
-      <div className="flex-1 panel p-8 flex flex-col overflow-y-auto select-text relative bg-dotgrid bg-repeat">
-        <style>{styles}</style>
-        
-        <div className="mb-8">
-          <h2 className="font-dot text-2xl tracking-widest text-chalk uppercase mb-1">New Run</h2>
-          <span className="text-xs uppercase tracking-label font-sans text-aluminium">Define research goal and starting URL</span>
-        </div>
+  // --- DASHBOARD VIEW ---
+  return (
+    <div className="flex-1 panel p-8 flex flex-col overflow-y-auto select-text relative bg-dotgrid bg-repeat">
+      <style>{styles}</style>
+      
+      <div className="mb-8">
+        <h2 className="font-dot text-2xl tracking-widest text-chalk uppercase mb-1">Research Harness</h2>
+        <span className="text-xs uppercase tracking-label font-sans text-aluminium">Define and execute parallel web research tasks</span>
+      </div>
 
-        <form onSubmit={handleRunStart} className="flex flex-col gap-6 max-w-4xl">
-          {/* Goal Textarea */}
-          <div className="flex flex-col gap-2">
-            <label className="text-xs uppercase tracking-label font-sans text-aluminium">Research Goal</label>
-            <textarea
-              value={goal}
-              onChange={(e) => setGoal(e.target.value)}
-              placeholder="e.g. Find the pricing page of OpenAI and extract the GPT-4o API price."
-              className="w-full h-32 bg-well border border-aluminium/20 rounded p-3 text-sm font-sans text-chalk placeholder-aluminium/40 focus:outline-none focus:ring-1 focus:ring-chalk/60 focus:border-chalk/60 transition-all resize-none"
-              required
-            />
-          </div>
-
-          {/* Starting URL Input */}
-          <div className="flex flex-col gap-2">
-            <label className="text-xs uppercase tracking-label font-sans text-aluminium">Starting URL</label>
-            <input
-              type="url"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              placeholder="e.g. https://openai.com"
-              className="w-full bg-well border border-aluminium/20 rounded px-3 py-2 text-xs font-mono text-chalk placeholder-aluminium/40 focus:outline-none focus:ring-1 focus:ring-chalk/60 focus:border-chalk/60 transition-all"
-              required
-            />
-          </div>
-
-          {/* Active Configuration Info */}
-          <div className="p-4 bg-carbon border border-aluminium/20 rounded flex items-center justify-between">
-            <div className="flex flex-col gap-1">
-              <span className="text-[10px] uppercase tracking-label font-sans text-aluminium">Active LLM Configuration</span>
-              {isLoadingSettings ? (
-                <span className="font-mono text-xs text-aluminium/60">Loading settings...</span>
-              ) : settings ? (
-                <div className="flex items-center gap-2">
-                  <span className="font-mono text-xs text-chalk font-semibold uppercase">{settings.activeProvider}</span>
-                  <span className="text-aluminium/40 font-mono text-xs">/</span>
-                  <span className="font-mono text-xs text-chalk">{settings.activeModel}</span>
-                </div>
-              ) : (
-                <span className="font-mono text-xs text-signal">Failed to load settings</span>
-              )}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-8 items-start">
+        {/* Launcher Form (Left Column, span 1) */}
+        <div className="xl:col-span-1 bg-[#161616]/40 border border-aluminium/15 rounded p-6 flex flex-col gap-6">
+          <h3 className="font-dot text-lg tracking-widest text-chalk uppercase border-b border-aluminium/10 pb-2">Launcher</h3>
+          
+          <form onSubmit={handleRunStart} className="flex flex-col gap-5">
+            {/* Goal Textarea */}
+            <div className="flex flex-col gap-2">
+              <label className="text-xs uppercase tracking-label font-sans text-aluminium">Research Goal</label>
+              <textarea
+                value={goal}
+                onChange={(e) => setGoal(e.target.value)}
+                placeholder="e.g. Find the pricing page of OpenAI and extract the GPT-4o API price."
+                className="w-full h-32 bg-well border border-aluminium/20 rounded p-3 text-sm font-sans text-chalk placeholder-aluminium/40 focus:outline-none focus:ring-1 focus:ring-chalk/60 focus:border-chalk/60 transition-all resize-none"
+                required
+              />
             </div>
-            <div>
+
+            {/* Starting URL Input */}
+            <div className="flex flex-col gap-2">
+              <label className="text-xs uppercase tracking-label font-sans text-aluminium">Starting URL</label>
+              <input
+                type="url"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="e.g. https://openai.com"
+                className="w-full bg-well border border-aluminium/20 rounded px-3 py-2 text-xs font-mono text-chalk placeholder-aluminium/40 focus:outline-none focus:ring-1 focus:ring-chalk/60 focus:border-chalk/60 transition-all"
+                required
+              />
+            </div>
+
+            {/* Active Configuration Info */}
+            <div className="p-3 bg-carbon border border-aluminium/10 rounded flex flex-col gap-2">
+              <div className="flex flex-col gap-0.5">
+                <span className="text-[9px] uppercase tracking-label font-sans text-aluminium">Active LLM Configuration</span>
+                {isLoadingSettings ? (
+                  <span className="font-mono text-[11px] text-aluminium/60">Loading settings...</span>
+                ) : settings ? (
+                  <div className="flex items-center gap-1.5 font-mono text-[11px]">
+                    <span className="text-chalk font-semibold uppercase">{settings.activeProvider}</span>
+                    <span className="text-aluminium/40">/</span>
+                    <span className="text-chalk truncate max-w-[150px]">{settings.activeModel}</span>
+                  </div>
+                ) : (
+                  <span className="font-mono text-[11px] text-signal">Failed to load settings</span>
+                )}
+              </div>
               <button
                 type="button"
                 onClick={onNavigateToSettings}
-                className="text-xs font-sans text-aluminium hover:text-chalk transition-colors border border-aluminium/20 hover:border-aluminium/40 rounded px-2.5 py-1 bg-transparent cursor-pointer"
+                className="text-[10px] font-sans text-aluminium hover:text-chalk transition-colors border border-aluminium/20 hover:border-aluminium/40 rounded py-1 bg-transparent cursor-pointer uppercase tracking-wider"
               >
-                Configure Settings
+                Configure settings
               </button>
             </div>
-          </div>
 
-          {/* Action Row */}
-          <div className="flex items-center gap-4 mt-2">
-            <button
-              type="submit"
-              disabled={!isConfigured || isLoadingSettings}
-              className={`px-5 py-2.5 text-xs font-sans uppercase tracking-label rounded border transition-all duration-150 cursor-pointer ${
-                isConfigured && !isLoadingSettings
-                  ? 'bg-carbon text-chalk border-aluminium/40 hover:border-chalk hover:shadow-active'
-                  : 'bg-carbon/50 text-aluminium/40 border-aluminium/10 cursor-not-allowed'
-              }`}
-            >
-              Run Agent
-            </button>
-            
-            {!isConfigured && !isLoadingSettings && (
-              <span className="text-xs text-signal font-sans font-medium uppercase tracking-[0.02em]">
-                Configure a provider in Settings
-              </span>
-            )}
-          </div>
-        </form>
-
-        {/* Recent Runs List */}
-        <div className="mt-12 mb-6 border-t border-aluminium/10 pt-8 max-w-4xl">
-          <h3 className="font-dot text-lg tracking-widest text-chalk uppercase mb-1">Recent Runs</h3>
-          <span className="text-xs uppercase tracking-label font-sans text-aluminium">History of research agent executions</span>
-        </div>
-
-        <div className="max-w-4xl">
-          {historyList.length === 0 ? (
-            <div className="p-6 bg-carbon/50 border border-aluminium/15 rounded text-center text-xs font-sans text-aluminium uppercase tracking-wider">
-              No past runs recorded.
-            </div>
-          ) : (
-            <div className="flex flex-col border border-aluminium/15 rounded overflow-hidden divide-y divide-aluminium/10 bg-carbon/20">
-              {historyList.map((runItem) => {
-                const hostname = getHostname(runItem.url);
-                const relativeTime = formatRelativeTime(runItem.startedAt);
-                
-                let dotClass = 'bg-aluminium';
-                let dotStyle = {};
-                if (runItem.status === 'done' || runItem.status === 'complete') {
-                  dotClass = 'bg-chalk';
-                  dotStyle = { boxShadow: '0 0 8px #FAFAFA' };
-                } else if (runItem.status === 'error') {
-                  dotClass = 'bg-signal';
-                  dotStyle = { boxShadow: '0 0 8px #D71921' };
-                }
-
-                return (
-                  <div
-                    key={runItem.id}
-                    onClick={() => handleRowClick(runItem.id)}
-                    className="flex items-center justify-between p-4 hover:bg-carbon/50 transition-colors cursor-pointer group"
-                  >
-                    <div className="flex items-center gap-4 min-w-0 flex-1 mr-4">
-                      <span
-                        className={`w-2 h-2 rounded-full flex-shrink-0 ${dotClass}`}
-                        style={dotStyle}
-                      ></span>
-                      <div className="flex flex-col min-w-0 gap-1">
-                        <span className="text-xs font-sans text-chalk font-medium truncate max-w-2xl group-hover:text-chalk transition-colors">
-                          {runItem.goal}
-                        </span>
-                        <span className="text-[10px] font-mono text-aluminium uppercase tracking-wider">
-                          {hostname}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-4 flex-shrink-0">
-                      <span className="text-[10px] font-mono text-aluminium uppercase tracking-wider">
-                        {relativeTime}
-                      </span>
-                      <span className="text-aluminium group-hover:text-chalk transition-colors font-mono text-xs select-none">
-                        &rarr;
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  if (status === 'running' || status === 'needs_human') {
-    return (
-      <div className="flex-1 panel p-8 flex flex-col overflow-y-auto select-none bg-dotgrid bg-repeat gap-6 min-h-0">
-        <style>{styles}</style>
-        
-        {/* Header bar */}
-        <div className="flex items-center justify-between pb-4 border-b border-aluminium/20">
-          <div className="flex items-center gap-3">
-            <span
-              className={`w-2.5 h-2.5 rounded-full transition-all duration-500 ${
-                status === 'needs_human'
-                  ? 'bg-signal shadow-signal animate-pulse'
-                  : 'bg-chalk shadow-active breath'
-              }`}
-            ></span>
-            <span className="font-dot text-lg tracking-widest text-chalk uppercase mt-0.5">
-              {status === 'needs_human' ? 'NEEDS HUMAN ATTENTION' : 'RUNNING RESEARCH'}
-            </span>
-          </div>
-          <button
-            onClick={handleCancel}
-            disabled={isCancelling}
-            className="px-3 py-1.5 text-xs font-sans text-signal bg-transparent border border-signal/20 hover:border-signal/50 hover:shadow-signal rounded transition-all duration-150 cursor-pointer"
-          >
-            {isCancelling ? 'CANCELLING...' : 'Cancel Run'}
-          </button>
-        </div>
-
-        {/* Workspace grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 min-h-0 flex-1">
-          {/* Screenshot Column */}
-          <div className="flex flex-col gap-2 min-h-0">
-            <span className="text-xs uppercase tracking-label font-sans text-aluminium">Live Screenshot</span>
-            <div className="flex-1 bg-well border border-aluminium/20 rounded-well overflow-hidden relative flex items-center justify-center p-2 min-h-[300px]">
-              {latestScreenshot ? (
-                <img
-                  src={latestScreenshot}
-                  alt="Browser Frame"
-                  className="max-w-full max-h-full object-contain rounded"
-                />
-              ) : (
-                <div className="flex flex-col items-center gap-2 text-center">
-                  <span className="font-dot text-xl text-aluminium/40 tracking-widest animate-pulse">...</span>
-                  <span className="text-xs font-sans text-aluminium/60 uppercase tracking-label">Waiting for screenshot</span>
-                </div>
+            {/* Action Row */}
+            <div className="flex flex-col gap-2 mt-2">
+              <button
+                type="submit"
+                disabled={!isConfigured || isLoadingSettings}
+                className={`w-full py-2.5 text-xs font-sans uppercase tracking-label rounded border transition-all duration-150 cursor-pointer ${
+                  isConfigured && !isLoadingSettings
+                    ? 'bg-carbon text-chalk border-aluminium/40 hover:border-chalk hover:shadow-active'
+                    : 'bg-carbon/50 text-aluminium/40 border-aluminium/10 cursor-not-allowed'
+                }`}
+              >
+                Add run
+              </button>
+              
+              {!isConfigured && !isLoadingSettings && (
+                <span className="text-[10px] text-signal font-sans font-medium uppercase tracking-[0.02em] text-center mt-1">
+                  Configure a provider in Settings
+                </span>
               )}
             </div>
-          </div>
+          </form>
+        </div>
 
-          {/* Action Log Column */}
-          <div className="flex flex-col gap-2 min-h-0">
-            <span className="text-xs uppercase tracking-label font-sans text-aluminium">Action Stream</span>
-            <div
-              onMouseEnter={() => setIsHovered(true)}
-              onMouseLeave={() => setIsHovered(false)}
-              className="flex-1 bg-well/50 backdrop-blur-sm border border-aluminium/20 rounded p-4 font-mono text-xs overflow-y-auto flex flex-col gap-3 min-h-[300px]"
-            >
-              {actionLog.length === 0 ? (
-                <div className="text-aluminium/40 italic font-mono text-xs uppercase tracking-wider p-2">
-                  No actions recorded yet...
-                </div>
-              ) : (
-                actionLog.map((step) => {
-                  const turnStr = String(step.turn).padStart(2, '0');
-                  const actionType = step.action?.action || 'unknown';
-                  const actionDetails = Object.entries(step.action || {})
-                    .filter(([k]) => k !== 'action')
-                    .map(([k, v]) => `${k}:${JSON.stringify(v)}`)
-                    .join(' ');
-                    
+        {/* Active Runs Grid & History (Right Columns, span 2) */}
+        <div className="xl:col-span-2 flex flex-col gap-8">
+          {/* Active Runs Section */}
+          <div className="flex flex-col gap-4">
+            <div className="flex items-baseline justify-between border-b border-aluminium/10 pb-2">
+              <h3 className="font-dot text-lg tracking-widest text-chalk uppercase">Active runs</h3>
+              {/* Header Statistics */}
+              <span className="text-xs font-mono text-aluminium uppercase tracking-wider">
+                {activeRuns.filter((r) => r.status === 'running' || r.status === 'needs_human').length} running &middot;{' '}
+                {activeRuns.filter((r) => r.status === 'queued').length} queued &middot;{' '}
+                {activeRuns.filter((r) => r.status === 'done' || r.status === 'error').length} done
+              </span>
+            </div>
+
+            {activeRuns.length === 0 ? (
+              <div className="p-12 bg-carbon/20 border border-aluminium/10 border-dashed rounded text-center text-xs font-sans text-aluminium uppercase tracking-wider">
+                No active runs. Use the launcher to add one.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {activeRuns.map((run) => {
+                  const hostname = getHostname(run.url);
+                  const turnStr = `T${String(run.currentTurn ?? 0).padStart(2, '0')}`;
+                  
                   return (
-                    <div key={step.turn} className="flex flex-col gap-1.5 border-b border-aluminium/5 pb-2.5 last:border-0 last:pb-0">
-                      {/* Thought line */}
-                      <div className="text-aluminium font-sans text-xs">
-                        <span className="font-mono text-xs text-aluminium/60 bg-carbon px-1.5 py-0.5 rounded mr-2">
-                          T{turnStr}
+                    <div
+                      key={run.runId}
+                      onClick={() => handleCardClick(run.runId)}
+                      className="bg-[#161616] border border-aluminium/20 hover:border-chalk/45 hover:shadow-active rounded p-4 flex flex-col justify-between cursor-pointer transition-all duration-150 select-none group"
+                    >
+                      {/* Top row: Hostname & Turn Badge */}
+                      <div className="flex items-center justify-between mb-3">
+                        <span className="text-[10px] font-mono text-aluminium uppercase tracking-wider truncate max-w-[70%]">
+                          {hostname}
                         </span>
-                        {step.reasoning || '(no thought)'}
+                        <span className="font-mono text-[9px] text-[#8A8A8A] bg-well border border-aluminium/10 px-1.5 py-0.5 rounded">
+                          {turnStr}
+                        </span>
                       </div>
-                      {/* Action line */}
-                      <div className="flex items-baseline gap-2 pl-8">
-                        <span className="font-dot text-chalk text-xs uppercase tracking-wider">
-                          ▸ {actionType}
-                        </span>
-                        <span className="text-chalk/80 text-xs font-mono truncate">
-                          {actionDetails}
+
+                      {/* Goal text */}
+                      <div className="text-xs font-sans text-chalk leading-relaxed mb-4 line-clamp-3 min-h-[3rem] h-[3rem]">
+                        {run.goal}
+                      </div>
+
+                      {/* Thumbnail */}
+                      <div className="h-28 bg-[#0A0A0A] border border-aluminium/20 rounded flex items-center justify-center overflow-hidden relative mb-4">
+                        {run.lastScreenshot ? (
+                          <img
+                            src={run.lastScreenshot}
+                            alt="Latest screenshot"
+                            className="max-w-full max-h-full object-contain"
+                          />
+                        ) : (
+                          <div className="flex items-center gap-1.5 text-[10px] text-aluminium/60 uppercase font-mono tracking-wider">
+                            <span className="w-1.5 h-1.5 rounded-full bg-aluminium animate-pulse" />
+                            <span>waiting</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Bottom row: Status Dot and status label */}
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          {renderStatusDot(run.status)}
+                          <span className="text-[10px] font-mono text-aluminium uppercase tracking-wider">
+                            {run.status}
+                          </span>
+                        </div>
+                        <span className="text-aluminium group-hover:text-chalk transition-colors font-mono text-xs select-none">
+                          &rarr;
                         </span>
                       </div>
                     </div>
                   );
-                })
-              )}
-              <div ref={logEndRef} />
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (status === 'done') {
-    return (
-      <div className="flex-1 panel p-8 flex flex-col overflow-y-auto select-none bg-dotgrid bg-repeat items-center justify-center relative">
-        <style>{styles}</style>
-        
-        <div className="max-w-2xl w-full panel p-8 flex flex-col gap-6 text-left relative bg-carbon/90">
-          <div className="flex items-center gap-3">
-            <span className="w-2.5 h-2.5 rounded-full bg-chalk shadow-active"></span>
-            <span className="font-dot text-lg tracking-widest text-chalk uppercase mt-0.5">
-              Research Done
-            </span>
-          </div>
-          
-          <div className="flex flex-col gap-2 select-text">
-            <span className="text-xs uppercase tracking-label font-sans text-aluminium">Extracted Data</span>
-            <pre className="text-xs font-mono text-chalk bg-well/80 p-4 border border-aluminium/20 rounded-well overflow-auto max-h-[350px] whitespace-pre-wrap break-all">
-              {JSON.stringify(extractedData, null, 2)}
-            </pre>
+                })}
+              </div>
+            )}
           </div>
 
-          <div className="flex justify-end mt-2">
-            <button
-              onClick={handleBackToIdle}
-              className="px-5 py-2.5 text-xs font-sans uppercase tracking-label bg-carbon text-chalk border border-aluminium/40 hover:border-chalk hover:shadow-active rounded transition-all duration-150 cursor-pointer"
-            >
-              New run
-            </button>
+          {/* Recent Runs List */}
+          <div className="flex flex-col gap-4 mt-4">
+            <h3 className="font-dot text-lg tracking-widest text-chalk uppercase border-b border-aluminium/10 pb-2">
+              Recent runs
+            </h3>
+
+            {historyList.length === 0 ? (
+              <div className="p-6 bg-carbon/20 border border-aluminium/10 rounded text-center text-xs font-sans text-aluminium uppercase tracking-wider">
+                No past runs recorded.
+              </div>
+            ) : (
+              <div className="flex flex-col border border-aluminium/15 rounded overflow-hidden divide-y divide-aluminium/10 bg-carbon/20">
+                {historyList.map((runItem) => {
+                  const hostname = getHostname(runItem.url);
+                  const relativeTime = formatRelativeTime(runItem.startedAt);
+                  
+                  return (
+                    <div
+                      key={runItem.id}
+                      onClick={() => handleCardClick(runItem.id)}
+                      className="flex items-center justify-between p-4 hover:bg-carbon/50 transition-colors cursor-pointer group"
+                    >
+                      <div className="flex items-center gap-4 min-w-0 flex-1 mr-4">
+                        {renderStatusDot(runItem.status)}
+                        <div className="flex flex-col min-w-0 gap-1">
+                          <span className="text-xs font-sans text-chalk font-medium truncate max-w-2xl group-hover:text-chalk transition-colors">
+                            {runItem.goal}
+                          </span>
+                          <span className="text-[10px] font-mono text-aluminium uppercase tracking-wider">
+                            {hostname}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4 flex-shrink-0">
+                        <span className="text-[10px] font-mono text-aluminium uppercase tracking-wider">
+                          {relativeTime}
+                        </span>
+                        <span className="text-aluminium group-hover:text-chalk transition-colors font-mono text-xs select-none">
+                          &rarr;
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Error state
-  return (
-    <div className="flex-1 panel p-8 flex flex-col overflow-y-auto select-none bg-dotgrid bg-repeat items-center justify-center relative">
-      <style>{styles}</style>
-      
-      <div className="max-w-2xl w-full panel p-8 flex flex-col gap-6 text-left relative border-signal/30 bg-carbon/90">
-        <div className="flex items-center gap-3">
-          <span className="w-2.5 h-2.5 rounded-full bg-signal shadow-signal animate-pulse"></span>
-          <span className="font-dot text-lg tracking-widest text-signal uppercase mt-0.5">
-            Run Failed
-          </span>
-        </div>
-
-        <div className="flex flex-col gap-2 select-text">
-          <span className="text-xs uppercase tracking-label font-sans text-aluminium">Error Message</span>
-          <div className="text-xs font-mono text-signal bg-signal/5 border border-signal/20 p-4 rounded-well overflow-auto max-h-[300px] whitespace-pre-wrap">
-            {errorMessage || 'An unknown error occurred during the agent execution.'}
-          </div>
-        </div>
-
-        <div className="flex justify-end mt-2">
-          <button
-            onClick={handleBackToIdle}
-            className="px-5 py-2.5 text-xs font-sans uppercase tracking-label bg-carbon text-chalk border border-aluminium/40 hover:border-chalk hover:shadow-active rounded transition-all duration-150 cursor-pointer"
-          >
-            New run
-          </button>
         </div>
       </div>
     </div>

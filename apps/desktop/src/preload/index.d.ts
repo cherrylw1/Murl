@@ -17,10 +17,20 @@ interface RunInput {
 
 type RunEvent =
   | { type: 'started';  runId: string }
-  | { type: 'status';   runId: string; status: 'running' | 'done' | 'error' | 'needs_human' }
+  | { type: 'status';   runId: string; status: 'queued' | 'running' | 'done' | 'error' | 'needs_human' }
   | { type: 'step';     runId: string; turn: number; reasoning?: string; action: import('@murl/engine').Action; screenshot?: string }
   | { type: 'done';     runId: string; extracted: unknown }
   | { type: 'error';    runId: string; message: string };
+
+interface RunState {
+  runId: string;
+  goal: string;
+  url: string;
+  status: 'queued' | 'running' | 'done' | 'error';
+  currentTurn?: number;
+  lastScreenshot?: string;
+  error?: string;
+}
 
 interface RunSummary {
   id: string;
@@ -47,6 +57,7 @@ interface RunDetail {
   finishedAt?: number;
   steps: RunStep[];
   extracted?: any;
+  error?: string;
 }
 
 interface Window {
@@ -63,6 +74,7 @@ interface Window {
     runs: {
       start(input: RunInput): Promise<{ runId: string }>;
       cancel(runId: string): Promise<{ ok: boolean }>;
+      getState(): Promise<RunState[]>;
       onEvent(cb: (e: RunEvent) => void): () => void;
     };
     history: {

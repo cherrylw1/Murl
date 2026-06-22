@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, Tray } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, Tray, WebContents } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -13,7 +13,298 @@ const __dirname = path.dirname(__filename);
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
-const activeRuns = new Map<string, BrowserSession>();
+
+export interface RunState {
+  runId: string;
+  goal: string;
+  url: string;
+  status: 'queued' | 'running' | 'done' | 'error';
+  currentTurn?: number;
+  lastScreenshot?: string;
+  error?: string;
+}
+
+interface QueuedRun {
+  runId: string;
+  goal: string;
+  url: string;
+  sender: WebContents;
+}
+
+class RunManager {
+  private runs = new Map<string, RunState>();
+  private queue: QueuedRun[] = [];
+  private activeSessions = new Map<string, BrowserSession>();
+  private activeCount = 0;
+  private maxConcurrent = 3;
+
+  constructor(
+    private store: SettingsStore,
+    private recorder: Recorder
+  ) {}
+
+  public getStates(): RunState[] {
+    return Array.from(this.runs.values()).reverse();
+  }
+
+  public enqueue(runId: string, goal: string, url: string, sender: WebContents) {
+    const runState: RunState = {
+      runId,
+      goal,
+      url,
+      status: 'queued',
+    };
+    this.runs.set(runId, runState);
+
+    sender.send('run:event', {
+      type: 'status',
+      runId,
+      status: 'queued',
+    });
+
+    this.queue.push({ runId, goal, url, sender });
+    this.processQueue();
+  }
+
+  public cancel(runId: string): boolean {
+    const run = this.runs.get(runId);
+    if (!run) return false;
+
+    const queueIndex = this.queue.findIndex((q) => q.runId === runId);
+    if (queueIndex !== -1) {
+      const qItem = this.queue[queueIndex];
+      this.queue.splice(queueIndex, 1);
+      
+      run.status = 'error';
+      run.error = 'Cancelled';
+      
+      qItem.sender.send('run:event', {
+        type: 'status',
+        runId,
+        status: 'error',
+      });
+      qItem.sender.send('run:event', {
+        type: 'error',
+        runId,
+        message: 'Run cancelled while queued',
+      });
+      
+      try {
+        this.recorder.finishRun(runId, { status: 'error', error: 'Run cancelled while queued' });
+      } catch (err) {
+        console.error('Failed to finish run in recorder:', err);
+      }
+      return true;
+    }
+
+    const session = this.activeSessions.get(runId);
+    if (session) {
+      session.close().catch(() => {});
+      this.activeSessions.delete(runId);
+      return true;
+    }
+
+    return false;
+  }
+
+  private async processQueue() {
+    if (this.activeCount >= this.maxConcurrent || this.queue.length === 0) {
+      return;
+    }
+
+    const next = this.queue.shift();
+    if (!next) return;
+
+    this.activeCount++;
+    const runState = this.runs.get(next.runId);
+    if (runState) {
+      runState.status = 'running';
+    }
+
+    // Stagger starts ~750ms to soften rate limits
+    await new Promise((resolve) => setTimeout(resolve, 750));
+
+    this.executeRun(next);
+  }
+
+  private async executeRun(item: QueuedRun) {
+    const { runId, goal, url, sender } = item;
+    const runState = this.runs.get(runId);
+
+    const settings = this.store.getSettingsView();
+    const providerId = settings.activeProvider;
+    const model = settings.activeModel;
+    const ollamaBaseUrl = this.store.getOllamaBaseUrl();
+    const decryptedKey = (providerId === 'openrouter' || providerId === 'gemini')
+      ? this.store.getDecryptedKey(providerId)
+      : undefined;
+
+    if ((providerId === 'openrouter' || providerId === 'gemini') && !decryptedKey) {
+      console.error(`Error: Provider key not configured`);
+      if (runState) {
+        runState.status = 'error';
+        runState.error = 'No provider configured — set one in Settings';
+      }
+      sender.send('run:event', {
+        type: 'error',
+        runId,
+        message: 'No provider configured — set one in Settings',
+      });
+      sender.send('run:event', {
+        type: 'status',
+        runId,
+        status: 'error',
+      });
+      
+      try {
+        this.recorder.finishRun(runId, { status: 'error', error: 'No provider configured — set one in Settings' });
+      } catch (err) {}
+      
+      this.activeCount--;
+      this.processQueue();
+      return;
+    }
+
+    try {
+      sender.send('run:event', { type: 'started', runId });
+      sender.send('run:event', { type: 'status', runId, status: 'running' });
+
+      let session: BrowserSession | null = null;
+      try {
+        const provider = createProvider(providerId, {
+          apiKey: decryptedKey,
+          baseUrl: providerId === 'ollama' ? ollamaBaseUrl : undefined
+        });
+
+        session = await BrowserSession.launch({ headless: true });
+        this.activeSessions.set(runId, session);
+
+        await session.goto(url);
+
+        const initialShot = await session.screenshot().catch(() => undefined);
+        let initialDataUrl: string | undefined = undefined;
+        if (initialShot) {
+          initialDataUrl = `data:image/png;base64,${initialShot.toString('base64')}`;
+        }
+        
+        if (runState) {
+          runState.lastScreenshot = initialDataUrl;
+          runState.currentTurn = 0;
+        }
+
+        sender.send('run:event', {
+          type: 'step',
+          runId,
+          turn: 0,
+          action: { action: 'navigate', url },
+          screenshot: initialDataUrl,
+        });
+
+        try {
+          this.recorder.recordStep({
+            runId,
+            turn: 0,
+            action: { action: 'navigate', url },
+            screenshot: initialShot,
+          });
+        } catch (err) {
+          console.error('Failed to record initial step:', err);
+        }
+
+        const runResult = await runAgent({
+          goal,
+          url,
+          provider,
+          model,
+          session,
+          onStep: async ({ turn, reasoning, action, screenshot }) => {
+            let dataUrl: string | undefined = undefined;
+            if (screenshot) {
+              dataUrl = `data:image/png;base64,${screenshot.toString('base64')}`;
+            }
+
+            if (runState) {
+              runState.lastScreenshot = dataUrl;
+              runState.currentTurn = turn;
+            }
+
+            sender.send('run:event', {
+              type: 'step',
+              runId,
+              turn,
+              reasoning,
+              action,
+              screenshot: dataUrl,
+            });
+
+            try {
+              this.recorder.recordStep({
+                runId,
+                turn,
+                thought: reasoning,
+                action,
+                screenshot,
+              });
+            } catch (err) {
+              console.error('Failed to record step in database:', err);
+            }
+          },
+        });
+
+        if (runResult.status === 'complete') {
+          if (runState) {
+            runState.status = 'done';
+          }
+          sender.send('run:event', { type: 'done', runId, extracted: runResult.extracted });
+          sender.send('run:event', { type: 'status', runId, status: 'done' });
+          try {
+            this.recorder.finishRun(runId, { status: 'complete', result: runResult.extracted });
+          } catch (err) {}
+        } else if (runResult.status === 'error') {
+          const errMsg = runResult.error || 'Unknown error occurred';
+          if (runState) {
+            runState.status = 'error';
+            runState.error = errMsg;
+          }
+          sender.send('run:event', { type: 'error', runId, message: errMsg });
+          sender.send('run:event', { type: 'status', runId, status: 'error' });
+          try {
+            this.recorder.finishRun(runId, { status: 'error', error: errMsg });
+          } catch (err) {}
+        } else {
+          if (runState) {
+            runState.status = 'done';
+          }
+          sender.send('run:event', { type: 'status', runId, status: 'done' });
+          sender.send('run:event', { type: 'done', runId, extracted: runResult.extracted });
+          try {
+            this.recorder.finishRun(runId, { status: runResult.status, result: runResult.extracted });
+          } catch (err) {}
+        }
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`Exception occurred during run:`, message);
+        if (runState) {
+          runState.status = 'error';
+          runState.error = message;
+        }
+        sender.send('run:event', { type: 'error', runId, message });
+        sender.send('run:event', { type: 'status', runId, status: 'error' });
+        try {
+          this.recorder.finishRun(runId, { status: 'error', error: message });
+        } catch (recErr) {}
+      } finally {
+        if (session) {
+          await session.close().catch(() => {});
+        }
+        this.activeSessions.delete(runId);
+      }
+    } finally {
+      this.activeCount--;
+      this.processQueue();
+    }
+  }
+}
 
 function createWindow(): void {
   let preloadPath = path.join(__dirname, '../preload/index.js');
@@ -66,6 +357,13 @@ app.whenReady().then(() => {
   const recorder = new Recorder({
     dbPath: path.join(app.getPath('userData'), 'murl.db'),
     screenshotDir: path.join(app.getPath('userData'), 'screenshots'),
+  });
+
+  const runManager = new RunManager(store, recorder);
+
+  // Set up runs:getState IPC Handler
+  ipcMain.handle('runs:getState', () => {
+    return runManager.getStates();
   });
 
   // Set up IPC handle calling the headless engine health()
@@ -121,6 +419,7 @@ app.whenReady().then(() => {
         finishedAt: (run.finished_at as number | null) ?? undefined,
         steps: mappedSteps,
         extracted: run.result,
+        error: (run.error as string | null) ?? undefined,
       };
     } catch (err) {
       console.error('Failed to get run:', err);
@@ -188,147 +487,13 @@ app.whenReady().then(() => {
   // Run/Agent IPC Handlers
   ipcMain.handle('run:start', async (event, input: { goal: string; url: string }) => {
     const runId = crypto.randomUUID();
-
-    const settings = store.getSettingsView();
-    const providerId = settings.activeProvider;
-    const model = settings.activeModel;
-    const ollamaBaseUrl = store.getOllamaBaseUrl();
-    const decryptedKey = (providerId === 'openrouter' || providerId === 'gemini')
-      ? store.getDecryptedKey(providerId)
-      : undefined;
-
-    if ((providerId === 'openrouter' || providerId === 'gemini') && !decryptedKey) {
-      console.error(`Error: Provider key not configured`);
-      setTimeout(() => {
-        event.sender.send('run:event', {
-          type: 'error',
-          runId,
-          message: 'No provider configured — set one in Settings',
-        });
-      }, 50);
-      return { runId };
-    }
-
-    try {
-      recorder.startRun({
-        id: runId,
-        goal: input.goal,
-        startUrl: input.url,
-        providerId,
-        model,
-      });
-    } catch (err) {
-      console.error('Failed to start run in database recorder:', err);
-    }
-
-    // Run the agent run asynchronously in the background
-    (async () => {
-      // Give the renderer a tiny bit of time to subscribe to events
-      await new Promise(resolve => setTimeout(resolve, 50));
-
-      event.sender.send('run:event', { type: 'started', runId });
-      event.sender.send('run:event', { type: 'status', runId, status: 'running' });
-
-      let session: BrowserSession | null = null;
-      try {
-        const provider = createProvider(providerId, {
-          apiKey: decryptedKey,
-          baseUrl: providerId === 'ollama' ? ollamaBaseUrl : undefined
-        });
-
-        session = await BrowserSession.launch({ headless: true });
-        activeRuns.set(runId, session);
-
-        await session.goto(input.url);
-
-        const initialShot = await session.screenshot().catch(() => undefined);
-        let initialDataUrl: string | undefined = undefined;
-        if (initialShot) {
-          initialDataUrl = `data:image/png;base64,${initialShot.toString('base64')}`;
-        }
-        event.sender.send('run:event', {
-          type: 'step',
-          runId,
-          turn: 0,
-          action: { action: 'navigate', url: input.url },
-          screenshot: initialDataUrl,
-        });
-        recorder.recordStep({
-          runId,
-          turn: 0,
-          action: { action: 'navigate', url: input.url },
-          screenshot: initialShot,
-        });
-
-        const runResult = await runAgent({
-          goal: input.goal,
-          url: input.url,
-          provider,
-          model,
-          session,
-          onStep: async ({ turn, reasoning, action, screenshot }) => {
-            let dataUrl: string | undefined = undefined;
-            if (screenshot) {
-              dataUrl = `data:image/png;base64,${screenshot.toString('base64')}`;
-            }
-            event.sender.send('run:event', {
-              type: 'step',
-              runId,
-              turn,
-              reasoning,
-              action,
-              screenshot: dataUrl,
-            });
-            recorder.recordStep({
-              runId,
-              turn,
-              thought: reasoning,
-              action,
-              screenshot,
-            });
-          },
-        });
-
-        if (runResult.status === 'complete') {
-          event.sender.send('run:event', { type: 'done', runId, extracted: runResult.extracted });
-          event.sender.send('run:event', { type: 'status', runId, status: 'done' });
-          recorder.finishRun(runId, { status: 'complete', result: runResult.extracted });
-        } else if (runResult.status === 'error') {
-          event.sender.send('run:event', { type: 'error', runId, message: runResult.error || 'Unknown error occurred' });
-          event.sender.send('run:event', { type: 'status', runId, status: 'error' });
-          recorder.finishRun(runId, { status: 'error', error: runResult.error || 'Unknown error occurred' });
-        } else {
-          event.sender.send('run:event', { type: 'status', runId, status: 'done' });
-          event.sender.send('run:event', { type: 'done', runId, extracted: runResult.extracted });
-          recorder.finishRun(runId, { status: runResult.status, result: runResult.extracted });
-        }
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.error(`Exception occurred during run:`, message);
-        event.sender.send('run:event', { type: 'error', runId, message });
-        event.sender.send('run:event', { type: 'status', runId, status: 'error' });
-        recorder.finishRun(runId, { status: 'error', error: message });
-      } finally {
-        if (session) {
-          await session.close().catch(() => {});
-        }
-        activeRuns.delete(runId);
-      }
-    })().catch(err => {
-      console.error('Background agent run failed:', err);
-    });
-
+    runManager.enqueue(runId, input.goal, input.url, event.sender);
     return { runId };
   });
 
   ipcMain.handle('run:cancel', async (_event, runId: string) => {
-    const session = activeRuns.get(runId);
-    if (session) {
-      await session.close().catch(() => {});
-      activeRuns.delete(runId);
-      return { ok: true };
-    }
-    return { ok: false };
+    const ok = runManager.cancel(runId);
+    return { ok };
   });
 
   createWindow();

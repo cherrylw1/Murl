@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('murl', {
   runs: {
     start: (input: { goal: string; url: string }) => ipcRenderer.invoke('run:start', input),
     cancel: (runId: string) => ipcRenderer.invoke('run:cancel', runId),
+    getState: () => ipcRenderer.invoke('runs:getState'),
     onEvent: (cb: (e: any) => void) => {
       const wrapper = (_event: any, payload: any) => cb(payload);
       ipcRenderer.on('run:event', wrapper);
