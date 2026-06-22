@@ -9,6 +9,7 @@ export interface SettingsView {
   providers: {
     openrouter: { configured: boolean };
     gemini:     { configured: boolean };
+    together:   { configured: boolean };
     ollama:     { baseUrl: string };
   };
 }
@@ -19,6 +20,7 @@ interface StoreData {
   keys: {
     openrouter?: string;
     gemini?: string;
+    together?: string;
   };
   ollamaBaseUrl: string;
 }
@@ -36,6 +38,7 @@ export class SettingsStore {
       activeModels: {
         openrouter: 'google/gemini-2.5-flash',
         gemini: 'gemini-2.5-flash',
+        together: 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
         ollama: 'llama3',
       },
       keys: {},
@@ -92,6 +95,9 @@ export class SettingsStore {
         gemini: {
           configured: !!data.keys.gemini,
         },
+        together: {
+          configured: !!data.keys.together,
+        },
         ollama: {
           baseUrl: data.ollamaBaseUrl,
         },
@@ -100,7 +106,7 @@ export class SettingsStore {
   }
 
   public async setKey(id: ProviderId, key: string): Promise<{ ok: boolean }> {
-    if (id !== 'openrouter' && id !== 'gemini') {
+    if (id !== 'openrouter' && id !== 'gemini' && id !== 'together') {
       throw new Error(`Cannot set API key for provider: ${id}`);
     }
     this.checkEncryptionAvailable();
@@ -114,7 +120,7 @@ export class SettingsStore {
   }
 
   public async clearKey(id: ProviderId): Promise<{ ok: boolean }> {
-    if (id !== 'openrouter' && id !== 'gemini') {
+    if (id !== 'openrouter' && id !== 'gemini' && id !== 'together') {
       throw new Error(`Cannot clear API key for provider: ${id}`);
     }
 
@@ -142,7 +148,7 @@ export class SettingsStore {
     return { ok: true };
   }
 
-  public getDecryptedKey(id: 'openrouter' | 'gemini'): string | undefined {
+  public getDecryptedKey(id: 'openrouter' | 'gemini' | 'together'): string | undefined {
     const data = this.load();
     const encryptedBase64 = data.keys[id];
     if (!encryptedBase64) {

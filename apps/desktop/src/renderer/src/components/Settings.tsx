@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 
-export type ProviderId = 'openrouter' | 'gemini' | 'ollama';
+export type ProviderId = 'openrouter' | 'gemini' | 'ollama' | 'together';
 
 export interface SettingsView {
   activeProvider: ProviderId;
@@ -8,6 +8,7 @@ export interface SettingsView {
   providers: {
     openrouter: { configured: boolean };
     gemini:     { configured: boolean };
+    together:   { configured: boolean };
     ollama:     { baseUrl: string };
   };
 }
@@ -24,6 +25,11 @@ const PROVIDER_MODELS: Record<ProviderId, string[]> = {
     'gemini-2.5-flash',
     'gemini-2.5-pro'
   ],
+  together: [
+    'meta-llama/Llama-3.3-70B-Instruct-Turbo',
+    'deepseek-ai/DeepSeek-V3',
+    'moonshotai/Kimi-K2-Instruct'
+  ],
   ollama: [
     'llama3',
     'mistral',
@@ -38,6 +44,7 @@ export default function Settings(): JSX.Element {
   // Input states
   const [openRouterKey, setOpenRouterKey] = useState('');
   const [geminiKey, setGeminiKey] = useState('');
+  const [togetherKey, setTogetherKey] = useState('');
   const [ollamaBaseUrl, setOllamaBaseUrl] = useState('');
   const [modelInput, setModelInput] = useState('');
 
@@ -45,12 +52,14 @@ export default function Settings(): JSX.Element {
   const [testStatuses, setTestStatuses] = useState<Record<ProviderId, 'idle' | 'testing' | 'success' | 'failed'>>({
     openrouter: 'idle',
     gemini: 'idle',
+    together: 'idle',
     ollama: 'idle',
   });
 
   const [testErrors, setTestErrors] = useState<Record<ProviderId, string | null>>({
     openrouter: null,
     gemini: null,
+    together: null,
     ollama: null,
   });
 
@@ -120,15 +129,16 @@ export default function Settings(): JSX.Element {
     }
   };
 
-  const handleSaveKey = async (provider: 'openrouter' | 'gemini') => {
-    const key = provider === 'openrouter' ? openRouterKey : geminiKey;
+  const handleSaveKey = async (provider: 'openrouter' | 'gemini' | 'together') => {
+    const key = provider === 'openrouter' ? openRouterKey : provider === 'gemini' ? geminiKey : togetherKey;
     if (!key) return;
     try {
       const res = await window.murl.settings.setKey(provider, key);
       if (res.ok) {
         // Clear key state immediately to prevent keys from persisting in renderer memory
         if (provider === 'openrouter') setOpenRouterKey('');
-        else setGeminiKey('');
+        else if (provider === 'gemini') setGeminiKey('');
+        else setTogetherKey('');
         
         await loadSettings();
         setTestStatuses((prev) => ({ ...prev, [provider]: 'idle' }));
@@ -139,12 +149,13 @@ export default function Settings(): JSX.Element {
     }
   };
 
-  const handleClearKey = async (provider: 'openrouter' | 'gemini') => {
+  const handleClearKey = async (provider: 'openrouter' | 'gemini' | 'together') => {
     try {
       const res = await window.murl.settings.clearKey(provider);
       if (res.ok) {
         if (provider === 'openrouter') setOpenRouterKey('');
-        else setGeminiKey('');
+        else if (provider === 'gemini') setGeminiKey('');
+        else setTogetherKey('');
 
         await loadSettings();
         setTestStatuses((prev) => ({ ...prev, [provider]: 'idle' }));
@@ -222,7 +233,7 @@ export default function Settings(): JSX.Element {
             <div className="flex flex-col gap-2">
               <span className="text-xs font-sans text-aluminium uppercase tracking-label">Provider</span>
               <div className="flex gap-2">
-                {(['openrouter', 'gemini', 'ollama'] as ProviderId[]).map((p) => (
+                {(['openrouter', 'gemini', 'together', 'ollama'] as ProviderId[]).map((p) => (
                   <button
                     key={p}
                     onClick={() => handleProviderChange(p)}
@@ -415,7 +426,81 @@ export default function Settings(): JSX.Element {
           </div>
         </div>
 
-        {/* Section 4: Ollama */}
+        {/* Section 4: Together */}
+        <div className="flex flex-col gap-6 py-6 border-b border-aluminium/10">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs uppercase tracking-label font-sans text-aluminium">Together</h3>
+            <div className="flex items-center gap-2">
+              <span className={`w-2 h-2 rounded-full transition-all duration-500 ${
+                testStatuses.together === 'failed'
+                  ? 'bg-signal shadow-signal animate-pulse'
+                  : testStatuses.together === 'testing'
+                  ? 'bg-aluminium/70 animate-pulse'
+                  : isConfigured('together')
+                  ? 'bg-chalk shadow-active'
+                  : 'bg-aluminium/40'
+              }`}></span>
+              <span className={`font-dot text-xs tracking-widest ${
+                testStatuses.together === 'failed'
+                  ? 'text-signal'
+                  : testStatuses.together === 'testing'
+                  ? 'text-aluminium/80'
+                  : isConfigured('together')
+                  ? 'text-chalk'
+                  : 'text-aluminium/40'
+              }`}>
+                {getStatusLabel('together')}
+              </span>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-3">
+            <label className="text-xs uppercase tracking-label font-sans text-aluminium/70">API KEY</label>
+            <div className="flex flex-wrap gap-3 items-center">
+              <input
+                type="password"
+                value={togetherKey}
+                onChange={(e) => setTogetherKey(e.target.value)}
+                placeholder={isConfigured('together') ? "••••••••••••••••" : "Not configured"}
+                className="flex-1 min-w-[200px] max-w-sm bg-well border border-aluminium/20 rounded px-3 py-1.5 text-xs font-mono text-chalk placeholder-aluminium/40 focus:outline-none focus:border-chalk/60 focus:ring-1 focus:ring-chalk/60 transition-all"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={() => handleSaveKey('together')}
+                  disabled={!togetherKey}
+                  className={`px-3 py-1.5 text-xs font-sans transition-all duration-150 border rounded cursor-pointer ${
+                    togetherKey
+                      ? 'bg-carbon text-chalk border-aluminium/40 hover:border-chalk hover:shadow-active'
+                      : 'bg-carbon/50 text-aluminium/40 border-aluminium/10 cursor-not-allowed'
+                  }`}
+                >
+                  Save
+                </button>
+                {isConfigured('together') && (
+                  <button
+                    onClick={() => handleClearKey('together')}
+                    className="px-3 py-1.5 text-xs font-sans text-signal bg-transparent border border-signal/20 hover:border-signal/50 hover:shadow-signal rounded transition-all duration-150 cursor-pointer"
+                  >
+                    Clear
+                  </button>
+                )}
+                <button
+                  onClick={() => handleTestConnection('together')}
+                  className="px-3 py-1.5 text-xs font-sans text-aluminium hover:text-chalk bg-transparent border border-aluminium/20 hover:border-aluminium/40 rounded transition-all duration-150 cursor-pointer"
+                >
+                  Test Connection
+                </button>
+              </div>
+            </div>
+            {testErrors.together && (
+              <div className="text-xs font-mono text-signal mt-1 max-w-2xl bg-signal/5 border border-signal/20 p-2 rounded">
+                {testErrors.together}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Section 5: Ollama */}
         <div className="flex flex-col gap-6 py-6">
           <div className="flex items-center justify-between">
             <h3 className="text-xs uppercase tracking-label font-sans text-aluminium">Ollama</h3>

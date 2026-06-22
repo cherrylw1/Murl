@@ -10,6 +10,35 @@ import crypto from 'crypto';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Intercept fetch for mock testing Together API
+if (process.env.MOCK_TOGETHER_API === 'true') {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const urlStr = typeof input === 'string' ? input : input.toString();
+    if (urlStr.includes('api.together.xyz/v1/chat/completions')) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: '{"thought": "Mocking together connection test", "action": "done"}',
+              },
+            },
+          ],
+          usage: {
+            prompt_tokens: 5,
+            completion_tokens: 5,
+          },
+        }),
+      } as Response;
+    }
+    return originalFetch(input, init);
+  };
+}
+
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
@@ -135,11 +164,11 @@ class RunManager {
     const providerId = settings.activeProvider;
     const model = settings.activeModel;
     const ollamaBaseUrl = this.store.getOllamaBaseUrl();
-    const decryptedKey = (providerId === 'openrouter' || providerId === 'gemini')
+    const decryptedKey = (providerId === 'openrouter' || providerId === 'gemini' || providerId === 'together')
       ? this.store.getDecryptedKey(providerId)
       : undefined;
 
-    if ((providerId === 'openrouter' || providerId === 'gemini') && !decryptedKey) {
+    if ((providerId === 'openrouter' || providerId === 'gemini' || providerId === 'together') && !decryptedKey) {
       console.error(`Error: Provider key not configured`);
       if (runState) {
         runState.status = 'error';
@@ -450,13 +479,17 @@ app.whenReady().then(() => {
 
   ipcMain.handle('settings:test', async (_event, id: ProviderId) => {
     try {
-      if (id === 'openrouter' || id === 'gemini') {
+      if (id === 'openrouter' || id === 'gemini' || id === 'together') {
         const apiKey = store.getDecryptedKey(id);
         if (!apiKey) {
           return { ok: false, error: 'API key is not configured.' };
         }
         const activeModel = store.getActiveModel(id);
-        const defaultModel = id === 'openrouter' ? 'google/gemini-2.5-flash' : 'gemini-2.5-flash';
+        const defaultModel = id === 'openrouter'
+          ? 'google/gemini-2.5-flash'
+          : id === 'gemini'
+          ? 'gemini-2.5-flash'
+          : 'meta-llama/Llama-3.3-70B-Instruct-Turbo';
         const model = activeModel || defaultModel;
 
         const provider = createProvider(id, { apiKey });

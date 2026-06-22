@@ -1,4 +1,4 @@
-type ProviderId = 'openrouter' | 'gemini' | 'ollama';
+type ProviderId = 'openrouter' | 'gemini' | 'ollama' | 'together';
 
 interface SettingsView {
   activeProvider: ProviderId;
@@ -6,6 +6,7 @@ interface SettingsView {
   providers: {
     openrouter: { configured: boolean };
     gemini:     { configured: boolean };
+    together:   { configured: boolean };
     ollama:     { baseUrl: string };
   };
 }

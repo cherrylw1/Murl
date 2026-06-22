@@ -2,12 +2,14 @@ import { ProviderId, ProviderConfig, LLMProvider } from './types.js';
 import { OpenRouterProvider } from './openrouter.js';
 import { GeminiProvider } from './gemini.js';
 import { OllamaProvider } from './ollama.js';
+import { TogetherProvider } from './together.js';
 
 export * from './types.js';
 export * from './openai-compat.js';
 export * from './openrouter.js';
 export * from './gemini.js';
 export * from './ollama.js';
+export * from './together.js';
 
 export function createProvider(
   name: ProviderId,
@@ -20,6 +22,8 @@ export function createProvider(
       return new GeminiProvider(config);
     case 'ollama':
       return new OllamaProvider(config);
+    case 'together':
+      return new TogetherProvider(config);
     default: {
       const exhaustiveCheck: never = name;
       throw new Error(`Unsupported provider: ${exhaustiveCheck}`);

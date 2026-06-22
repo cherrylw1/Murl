@@ -24,7 +24,7 @@ export interface CompletionResponse {
   raw?: unknown;
 }
 
-export type ProviderId = 'openrouter' | 'gemini' | 'ollama';
+export type ProviderId = 'openrouter' | 'gemini' | 'ollama' | 'together';
 
 export interface ProviderConfig {
   apiKey?: string;
