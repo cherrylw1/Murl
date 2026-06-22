@@ -71,6 +71,26 @@ const styles = `
 .breath {
   animation: breath 3s ease-in-out infinite;
 }
+@keyframes breath-slow {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+.breath-slow {
+  animation: breath-slow 2.5s ease-in-out infinite;
+}
+@keyframes breath-slow-error {
+  0%, 100% {
+    opacity: 0.6;
+    box-shadow: 0 0 8px rgba(215, 25, 33, 0.15);
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 20px rgba(215, 25, 33, 0.45);
+  }
+}
+.breath-slow-error {
+  animation: breath-slow-error 2.5s ease-in-out infinite;
+}
 @keyframes pulse-glow {
   0%, 100% {
     opacity: 0.6;
@@ -88,6 +108,15 @@ const styles = `
   .breath {
     animation: none;
     opacity: 1;
+  }
+  .breath-slow {
+    animation: none;
+    opacity: 1;
+  }
+  .breath-slow-error {
+    animation: none;
+    opacity: 1;
+    box-shadow: 0 0 20px rgba(215, 25, 33, 0.30);
   }
   .pulse-glow {
     animation: none;
@@ -120,6 +149,86 @@ function formatRelativeTime(startedAt: number): string {
   }
   const diffDays = Math.floor(diffHrs / 24);
   return `${diffDays}d ago`;
+}
+
+interface GlyphWallProps {
+  runs: RunState[];
+  onCardClick: (runId: string) => void;
+}
+
+function GlyphWall({ runs, onCardClick }: GlyphWallProps): JSX.Element {
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-6 justify-items-center">
+      {runs.map((run, index) => {
+        const indexStr = String(index + 1).padStart(2, '0');
+        const turnStr = run.status === 'queued' ? 'T--' : `T${run.currentTurn ?? 0}`;
+        
+        const isError = run.status === 'error';
+        const isNeedsHuman = run.status === 'needs_human';
+        const isDone = run.status === 'done';
+        const isRunning = run.status === 'running';
+        const isQueued = run.status === 'queued';
+
+        let cardClasses = '';
+        let dotsContainerClasses = '';
+        let litDotClass = '';
+        let litCount = 0;
+
+        if (isQueued) {
+          cardClasses = 'border-aluminium/10 opacity-60 hover:opacity-90 hover:border-aluminium/25';
+          litCount = 0;
+        } else if (isRunning) {
+          cardClasses = 'border-aluminium/20 hover:border-chalk/40 hover:shadow-active';
+          dotsContainerClasses = 'breath-slow';
+          litDotClass = 'bg-chalk';
+          const currentTurn = run.currentTurn ?? 0;
+          litCount = Math.min(25, Math.max(1, (currentTurn + 1) * 5));
+        } else if (isDone) {
+          cardClasses = 'border-aluminium/30 shadow-active';
+          litDotClass = 'bg-chalk';
+          litCount = 25;
+        } else if (isError || isNeedsHuman) {
+          cardClasses = 'border-signal/30 shadow-signal breath-slow-error';
+          litDotClass = 'bg-signal';
+          litCount = 25;
+        }
+
+        return (
+          <div
+            key={run.runId}
+            onClick={() => onCardClick(run.runId)}
+            title={`${run.goal} · ${run.status} · ${turnStr}`}
+            className={`w-20 h-20 bg-carbon border rounded flex flex-col items-center justify-center relative cursor-pointer select-none group transition-all duration-150 ${cardClasses}`}
+          >
+            {/* Index label top-left */}
+            <div className="absolute top-1.5 left-2 font-dot text-[9px] text-aluminium select-none">
+              {indexStr}
+            </div>
+
+            {/* 5x5 dot grid in the center */}
+            <div className={`grid grid-cols-5 gap-[4px] justify-center items-center ${dotsContainerClasses}`}>
+              {Array.from({ length: 25 }).map((_, i) => {
+                const isLit = i < litCount;
+                return (
+                  <span
+                    key={i}
+                    className={`w-[3px] h-[3px] rounded-full transition-colors duration-200 ${
+                      isLit ? litDotClass : 'bg-aluminium/10'
+                    }`}
+                  />
+                );
+              })}
+            </div>
+
+            {/* Turn label bottom-right */}
+            <div className="absolute bottom-1.5 right-2 font-dot text-[9px] text-aluminium select-none">
+              {turnStr}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 export default function Runs({ onNavigateToSettings }: RunsProps): JSX.Element {
@@ -716,64 +825,7 @@ export default function Runs({ onNavigateToSettings }: RunsProps): JSX.Element {
                 No active runs. Use the launcher to add one.
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {activeRuns.map((run) => {
-                  const hostname = getHostname(run.url);
-                  const turnStr = `T${String(run.currentTurn ?? 0).padStart(2, '0')}`;
-                  
-                  return (
-                    <div
-                      key={run.runId}
-                      onClick={() => handleCardClick(run.runId)}
-                      className="bg-[#161616] border border-aluminium/20 hover:border-chalk/45 hover:shadow-active rounded p-4 flex flex-col justify-between cursor-pointer transition-all duration-150 select-none group"
-                    >
-                      {/* Top row: Hostname & Turn Badge */}
-                      <div className="flex items-center justify-between mb-3">
-                        <span className="text-[10px] font-mono text-aluminium uppercase tracking-wider truncate max-w-[70%]">
-                          {hostname}
-                        </span>
-                        <span className="font-mono text-[9px] text-[#8A8A8A] bg-well border border-aluminium/10 px-1.5 py-0.5 rounded">
-                          {turnStr}
-                        </span>
-                      </div>
-
-                      {/* Goal text */}
-                      <div className="text-xs font-sans text-chalk leading-relaxed mb-4 line-clamp-3 min-h-[3rem] h-[3rem]">
-                        {run.goal}
-                      </div>
-
-                      {/* Thumbnail */}
-                      <div className="h-28 bg-[#0A0A0A] border border-aluminium/20 rounded flex items-center justify-center overflow-hidden relative mb-4">
-                        {run.lastScreenshot ? (
-                          <img
-                            src={run.lastScreenshot}
-                            alt="Latest screenshot"
-                            className="max-w-full max-h-full object-contain"
-                          />
-                        ) : (
-                          <div className="flex items-center gap-1.5 text-[10px] text-aluminium/60 uppercase font-mono tracking-wider">
-                            <span className="w-1.5 h-1.5 rounded-full bg-aluminium animate-pulse" />
-                            <span>waiting</span>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Bottom row: Status Dot and status label */}
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          {renderStatusDot(run.status)}
-                          <span className="text-[10px] font-mono text-aluminium uppercase tracking-wider">
-                            {run.status}
-                          </span>
-                        </div>
-                        <span className="text-aluminium group-hover:text-chalk transition-colors font-mono text-xs select-none">
-                          &rarr;
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+              <GlyphWall runs={activeRuns} onCardClick={handleCardClick} />
             )}
           </div>
 
