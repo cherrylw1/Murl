@@ -82,11 +82,57 @@ interface Window {
       list(): Promise<RunSummary[]>;
       get(id: string): Promise<RunDetail | null>;
     };
+    repo: {
+      add(name: string, path: string): Promise<{ id: string }>;
+      list(): Promise<Repository[]>;
+      remove(id: string): Promise<{ ok: boolean }>;
+    };
+    tasks: {
+      start(input: { prompt: string; workspaceId: string; repoPath: string }): Promise<{ taskId: string }>;
+      cancel(input: { taskId: string; repoPath: string }): Promise<{ ok: boolean }>;
+      getState(): Promise<TaskState[]>;
+      onEvent(cb: (e: TaskEvent) => void): () => void;
+    };
   };
 }
 
+interface Repository {
+  id: string;
+  path: string;
+  name: string;
+  createdAt: number;
+}
 
+interface TaskState {
+  taskId: string;
+  workspaceId: string;
+  prompt: string;
+  branchName: string;
+  worktreePath: string;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  error?: string;
+}
 
+interface Task {
+  id: string;
+  workspaceId: string;
+  prompt: string;
+  branchName: string;
+  worktreePath: string;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  errorMessage?: string;
+  createdAt: number;
+  finishedAt?: number;
+}
+
+type TaskEvent =
+  | { type: 'started'; taskId: string }
+  | { type: 'status'; taskId: string; status: 'queued' | 'running' | 'completed' | 'failed' }
+  | { type: 'info'; taskId: string; message: string }
+  | { type: 'stdout'; taskId: string; message: string }
+  | { type: 'stderr'; taskId: string; message: string }
+  | { type: 'error'; taskId: string; message: string }
+  | { type: 'done'; taskId: string };
 
 
 

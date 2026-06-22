@@ -27,4 +27,24 @@ contextBridge.exposeInMainWorld('murl', {
     list: () => ipcRenderer.invoke('history:list'),
     get: (runId: string) => ipcRenderer.invoke('history:get', runId),
   },
+  repo: {
+    add: (name: string, path: string) => ipcRenderer.invoke('repo:add', name, path),
+    list: () => ipcRenderer.invoke('repo:list'),
+    remove: (id: string) => ipcRenderer.invoke('repo:remove', id),
+  },
+  tasks: {
+    start: (input: { prompt: string; workspaceId: string; repoPath: string }) =>
+      ipcRenderer.invoke('task:start', input),
+    cancel: (input: { taskId: string; repoPath: string }) =>
+      ipcRenderer.invoke('task:cancel', input),
+    getState: () => ipcRenderer.invoke('tasks:getState'),
+    onEvent: (cb: (e: any) => void) => {
+      const wrapper = (_event: any, payload: any) => cb(payload);
+      ipcRenderer.on('task:event', wrapper);
+      return () => {
+        ipcRenderer.removeListener('task:event', wrapper);
+      };
+    },
+  },
 });
+

@@ -6,3 +6,5 @@ export * from './providers/index.js';
 export * from './browser/index.js';
 export * from './agent/index.js';
 export * from './store/index.js';
+export * from './worktree/index.js';
+
